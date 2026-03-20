@@ -59,6 +59,16 @@ function containsId(form: Form, id: string): boolean {
   return form.children.some((c) => containsId(c, id));
 }
 
+/** Find a form by id anywhere in a tree. */
+function findById(form: Form, id: string): Form | null {
+  if (form.id === id) return form;
+  for (const c of form.children) {
+    const found = findById(c, id);
+    if (found) return found;
+  }
+  return null;
+}
+
 /** Replace a node (by id) with zero or more replacement nodes in its parent's children. */
 function replaceInForm(tree: Form, targetId: string, replacement: Form[]): Form {
   let changed = false;
@@ -76,38 +86,106 @@ function replaceInForm(tree: Form, targetId: string, replacement: Form[]): Form 
   return changed ? { ...tree, children: newChildren } : tree;
 }
 
-/** Replace a node in the state (across all roots). Replacements that bubble
- *  up to root level become new roots positioned near the original. */
-function replaceInState(
+/** Add a child to a specific parent node. */
+function addChildToForm(tree: Form, parentId: string, child: Form): Form {
+  if (tree.id === parentId) {
+    return { ...tree, children: [...tree.children, child] };
+  }
+  let changed = false;
+  const newChildren = tree.children.map((c) => {
+    const updated = addChildToForm(c, parentId, child);
+    if (updated !== c) changed = true;
+    return updated;
+  });
+  return changed ? { ...tree, children: newChildren } : tree;
+}
+
+/** Remove a form from the state. Returns the removed form and the new state. */
+export function removeFromState(
   state: State,
   targetId: string,
-  replacement: Form[],
-): State {
-  const newRoots: RootForm[] = [];
+): { removed: Form | null; newState: State } {
+  // Check if it's a root
+  const rootIdx = state.roots.findIndex((r) => r.id === targetId);
+  if (rootIdx >= 0) {
+    const removed = state.roots[rootIdx];
+    return {
+      removed,
+      newState: { roots: state.roots.filter((_, i) => i !== rootIdx) },
+    };
+  }
+  // It's nested — remove from parent
   for (const root of state.roots) {
-    if (root.id === targetId) {
-      // The root itself is being replaced — spread replacements as new roots
-      let xOff = 0;
-      for (const r of replacement) {
-        newRoots.push({ ...r, x: Math.round(root.x + xOff), y: Math.round(root.y) });
-        xOff += 60;
-      }
-    } else {
-      const updated = replaceInForm(root, targetId, replacement);
-      if (updated === root) {
-        newRoots.push(root);
-      } else {
-        // Check if the replacement caused children to bubble up
-        newRoots.push({ ...updated, x: root.x, y: root.y });
-      }
+    const found = findById(root, targetId);
+    if (found) {
+      const newRoots = state.roots.map((r) => {
+        const updated = replaceInForm(r, targetId, []);
+        return updated === r ? r : { ...updated, x: r.x, y: r.y };
+      });
+      return { removed: found, newState: { roots: newRoots } };
     }
   }
-  return { roots: newRoots };
+  return { removed: null, newState: state };
+}
+
+/** Add a form as a child of a specific parent in the state. */
+function addToParent(state: State, parentId: string, child: Form): State {
+  return {
+    roots: state.roots.map((r) => {
+      const updated = addChildToForm(r, parentId, child);
+      return updated === r ? r : { ...updated, x: r.x, y: r.y };
+    }),
+  };
+}
+
+// ── Find all "islands" — places a form could be dropped ──
+// An island is any form that could accept a child.
+// For james algebra: any boundary node can contain children.
+// We exclude the dragged form itself and its descendants.
+
+export type Island = {
+  parentId: string;
+  state: State;
+};
+
+export function findAllIslands(
+  state: State,
+  draggedId: string,
+): Island[] {
+  const { removed, newState } = removeFromState(state, draggedId);
+  if (!removed) return [];
+
+  const islands: Island[] = [];
+
+  function walkForm(form: Form) {
+    // Any boundary node is a valid drop target
+    islands.push({
+      parentId: form.id,
+      state: addToParent(newState, form.id, removed!),
+    });
+
+    for (const child of form.children) {
+      walkForm(child);
+    }
+  }
+
+  for (const root of newState.roots) {
+    walkForm(root);
+  }
+
+  return islands;
+}
+
+/** State where the dragged form becomes a free-floating root. */
+export function floatingState(
+  state: State,
+  draggedId: string,
+): { stateWithout: State; removed: Form | null } {
+  const { removed, newState } = removeFromState(state, draggedId);
+  return { stateWithout: newState, removed };
 }
 
 // ── Clarify rewrite ──
-//   ([A]) → A  or  [(A)] → A
-//   Trigger must be a grandchild (survives the rewrite).
 
 function invertiblePair(a: BoundaryType, b: BoundaryType): boolean {
   return (
@@ -122,7 +200,32 @@ function isClarifiable(form: Form): boolean {
   );
 }
 
-export function allRewrites(
+function replaceInState(
+  state: State,
+  targetId: string,
+  replacement: Form[],
+): State {
+  const newRoots: RootForm[] = [];
+  for (const root of state.roots) {
+    if (root.id === targetId) {
+      let xOff = 0;
+      for (const r of replacement) {
+        newRoots.push({ ...r, x: Math.round(root.x + xOff), y: Math.round(root.y) });
+        xOff += 60;
+      }
+    } else {
+      const updated = replaceInForm(root, targetId, replacement);
+      if (updated === root) {
+        newRoots.push(root);
+      } else {
+        newRoots.push({ ...updated, x: root.x, y: root.y });
+      }
+    }
+  }
+  return { roots: newRoots };
+}
+
+export function allClarifyRewrites(
   state: State,
   triggerId: string,
 ): State[] {

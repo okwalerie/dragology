@@ -6,7 +6,9 @@ import { type DragSpecBuilder, param } from "../../DragSpec";
 import { Svgx } from "../../svgx";
 import { translate } from "../../svgx/helpers";
 import {
-  allRewrites,
+  allClarifyRewrites,
+  findAllIslands,
+  floatingState,
   type Form,
   type State,
   mkState,
@@ -15,10 +17,14 @@ import {
 } from "./forms";
 
 // ── Initial state ──
+// A playground with some containers to drag things between.
 
 const initialState: State = mkState(
-  [R(S(R())), 20, 30],        // ([ () ]) — clarifies to ()
-  [R(S(R(), R())), 100, 30],  // ([ () () ]) — clarifies to () ()
+  [R(S(R())), 20, 30],           // ([()]) — clarifiable
+  [R(S(R(), R())), 120, 30],     // ([()()])  — clarifiable, two inner rounds
+  [R(S()), 260, 30],             // ([]) — empty frame, drop target
+  [R(S()), 260, 100],            // ([]) — another empty frame
+  [R(), 350, 60],                // () — lone round, can be dragged into frames
 );
 
 // ── Colors ──
@@ -45,7 +51,7 @@ export function measure(form: Form): { w: number; h: number } {
   return { w: innerW + PAD * 2, h: innerH + PAD * 2 };
 }
 
-// ── Render a form (not a root — no position) ──
+// ── Render ──
 
 function renderForm(
   state: State,
@@ -57,13 +63,19 @@ function renderForm(
   const colors = COLORS[form.boundary] ?? COLORS.round;
 
   // render children horizontally
+  // IMPORTANT: each child wrapper gets its own id so the layered SVG system
+  // extracts them independently. Without this, adding/removing children
+  // changes the parent's child count and breaks lerp.
   const childElements: Svgx[] = [];
   let x = PAD;
-  for (const child of form.children) {
+  for (let i = 0; i < form.children.length; i++) {
+    const child = form.children[i];
     const cr = renderForm(state, child, d, depth + 1);
     const yOff = PAD + (h - PAD * 2 - cr.h) / 2;
     childElements.push(
-      <g transform={translate(x, yOff)}>{cr.element}</g>,
+      <g id={`${form.id}-slot-${i}`} transform={translate(x, yOff)}>
+        {cr.element}
+      </g>,
     );
     x += cr.w + GAP;
   }
@@ -116,17 +128,43 @@ function renderForm(
 }
 
 // ── Drag spec ──
+// Three behaviors layered:
+// 1. Clarify rewrites (d.between + snap+chain) — for grandchildren of ([...])
+// 2. Island snapping (d.closest + withFloating) — drag into any container
+// 3. Free positioning (d.vary) — whenFar from any island, float freely
 
 function dragSpec(
   d: DragSpecBuilder<State>,
   state: State,
   draggedId: string,
 ) {
-  const targets = allRewrites(state, draggedId);
+  // First check for clarify rewrites (these use d.between for smooth morphing)
+  const clarifyTargets = allClarifyRewrites(state, draggedId);
+  if (clarifyTargets.length > 0) {
+    return d
+      .closest(clarifyTargets.map((t) => d.between([state, t])))
+      .withSnapRadius(1, { chain: true });
+  }
 
-  if (targets.length === 0) {
-    // No rewrite targets — check if this is a root form.
-    // If so, allow free positioning via d.vary.
+  // Find all islands (containers this form could snap into)
+  const islands = findAllIslands(state, draggedId);
+
+  // Build the floating/free-position backdrop
+  const { stateWithout, removed } = floatingState(state, draggedId);
+  if (!removed) return d.between([state]);
+
+  // The root index in the "floating" state (we'll add it as a new root)
+  const floatState: State = {
+    roots: [...stateWithout.roots, { ...removed, x: 0, y: 0 }],
+  };
+  const floatIdx = floatState.roots.length - 1;
+  const varySpec = d.vary(floatState, [
+    param("roots", floatIdx, "x"),
+    param("roots", floatIdx, "y"),
+  ]);
+
+  if (islands.length === 0) {
+    // No islands — just free drag (root forms with no valid containers nearby)
     const rootIdx = state.roots.findIndex((r) => r.id === draggedId);
     if (rootIdx >= 0) {
       return d.vary(state, [
@@ -134,18 +172,18 @@ function dragSpec(
         param("roots", rootIdx, "y"),
       ]);
     }
-    // Non-root with no targets: fixed
-    return d.between([state]);
+    return varySpec;
   }
 
-  // Has rewrite targets — interpolate toward them.
-  // Also include the current state as a "stay put" option.
+  // Snap-to-islands pattern:
+  // Close to an island → snap in. Far from all → free float.
   return d
-    .closest(targets.map((t) => d.between([state, t])))
-    .withSnapRadius(1, { chain: true });
+    .closest(islands.map((island) => d.fixed(island.state)))
+    .withFloating()
+    .whenFar(varySpec);
 }
 
-// ── Draggable: render all roots at their x,y positions ──
+// ── Draggable ──
 
 const draggable: Draggable<State> = ({ state, d }) => {
   return (
@@ -170,10 +208,20 @@ export default demo(
       <DemoDraggable
         draggable={draggable}
         initialState={initialState}
-        width={400}
-        height={200}
+        width={500}
+        height={250}
       />
     </DemoWithConfig>
   ),
-  { tags: ["d.between", "spec.withSnapRadius [w/chain]", "d.vary", "math"] },
+  {
+    tags: [
+      "d.between",
+      "spec.withSnapRadius [w/chain]",
+      "d.vary",
+      "d.closest",
+      "spec.withFloating",
+      "spec.whenFar",
+      "math",
+    ],
+  },
 );

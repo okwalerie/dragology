@@ -1,25 +1,29 @@
 {
   "name": "dragology",
-  "version": "0.1.2",
+  "version": "0.1.7",
   "type": "module",
+  "packageManager": "pnpm@9.12.0",
   "main": "dist-lib/index.js",
   "types": "dist-lib/index.d.ts",
   "files": [
-    "dist-lib"
+    "dist-lib",
+    "docs/AGENTS.md"
   ],
   "scripts": {
     "dev": "vite",
+    "bench": "vitest bench",
     "build": "vite build",
     "clean": "rm -rf dist-lib dist-demo",
     "build:lib": "bash build-lib.sh",
     "test": "vitest run",
+    "fuzz": "FUZZ=1 vitest run src/fuzz --silent=false --reporter=verbose",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit -p tsconfig.app.json && tsc --noEmit -p tsconfig.node.json",
     "prettier": "prettier --write src",
     "lint": "eslint src",
-    "check": "npm run typecheck && npm test && npm run lint",
-    "prepublishOnly": "npm run clean && npm run build:lib",
-    "release": "npm run check && npm version patch && npm publish"
+    "check": "pnpm run typecheck && pnpm test && pnpm run lint",
+    "prepublishOnly": "pnpm run clean && pnpm run build:lib",
+    "release": "pnpm run check && pnpm version patch && pnpm publish"
   },
   "peerDependencies": {
     "react": "^18 || ^19",
@@ -33,18 +37,14 @@
     "d3-interpolate": "^3.0.1",
     "d3-interpolate-path": "^2.3.0",
     "immer": "^11.0.0",
-    "lodash": "^4.17.21"
+    "lodash": "^4.17.21",
+    "qrcode-generator": "^2.0.4"
   },
   "devDependencies": {
-    "@babel/standalone": "^7.28.5",
     "@eslint/js": "^9.39.1",
-    "@mdx-js/mdx": "^3.1.1",
-    "@mdx-js/react": "^3.1.1",
-    "@mdx-js/rollup": "^3.1.1",
-    "@monaco-editor/react": "^4.7.0",
-    "@tailwindcss/vite": "^4.1.17",
+    "@tailwindcss/vite": "^4.2.2",
     "@testing-library/react": "^16.3.2",
-    "@types/babel__standalone": "^7.1.9",
+    "@types/d3-color": "^3.1.3",
     "@types/d3-delaunay": "^6.0.4",
     "@types/d3-ease": "^3.0.2",
     "@types/d3-interpolate": "^3.0.4",
@@ -54,22 +54,20 @@
     "@types/lodash": "^4.17.20",
     "@types/node": "^25.2.3",
     "@types/parse-gitignore": "^1.0.2",
-    "@types/prettier": "^2.7.3",
     "@types/react": "^19.2.4",
     "@types/react-dom": "^19.2.3",
-    "@vitejs/plugin-react": "^5.1.1",
+    "@vitejs/plugin-react": "^6.0.1",
     "bluefish-js": "^0.0.38",
     "d3-shape": "^3.2.0",
     "dagre": "^0.8.5",
     "deep-freeze-es6": "^5.0.0",
     "dts-bundle-generator": "^9.5.1",
+    "esbuild": "^0.27.3",
     "eslint": "^9.39.1",
     "eslint-plugin-react-hooks": "^7.0.1",
     "html-react-parser": "^5.2.10",
     "jsdom": "^29.0.0",
     "json-diff-ts": "^4.8.2",
-    "monaco-editor": "^0.55.1",
-    "parse-gitignore": "^2.0.0",
     "peggy": "^3.0.2",
     "prettier": "^3.8.1",
     "prettier-plugin-organize-imports": "^4.0.0",
@@ -80,8 +78,8 @@
     "ts-pegjs": "^4.2.1",
     "typescript": "^5.2.2",
     "typescript-eslint": "^8.46.4",
-    "vite": "^7.3.1",
-    "vite-plugin-qrcode": "^0.3.0",
-    "vitest": "^4.0.6"
+    "vite": "^8.0.3",
+    "vite-plugin-qrcode": "^0.4.1",
+    "vitest": "^5.0.0-beta.7"
   }
 }

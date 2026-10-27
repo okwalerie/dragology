@@ -68,7 +68,7 @@ const draggable: Draggable<State> = ({ state, d }) => {
         id="planet"
         transform={translate(planetX, planetY)}
         dragologyZIndex={1}
-        dragology={() =>
+        dragologyOnDrag={() =>
           d.closest(
             STARS.map((_, starIdx) =>
               d.vary(
@@ -94,5 +94,5 @@ export default demo(
       height={400}
     />
   ),
-  { tags: ["d.vary", "d.closest", "multiple continuous targets"] },
+  { tags: ["d.closest", "d.vary", "multiple continuous targets"] },
 );

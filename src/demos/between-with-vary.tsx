@@ -76,10 +76,10 @@ const draggable: Draggable<State> = ({ state, d }) => {
         transform={translate(knobPos)}
         r={14}
         fill="#333"
-        dragology={() =>
+        dragologyOnDrag={() =>
           d.between([
             d.vary({ mode: "slider", value: 50 }, param("value"), {
-              constraint: (s) => inOrder(0, s.value, 100),
+              constraint: (s) => inOrder([0, s.value, 100]),
             }),
             objectEntries(islandPos).map(([key]) =>
               d.fixed({ mode: "island", id: key }),
@@ -106,5 +106,5 @@ export default demo(
       />
     </>
   ),
-  { tags: ["d.between [dynamic]", "d.vary"] },
+  { tags: ["d.between [dynamic]", "d.fixed", "d.vary"] },
 );

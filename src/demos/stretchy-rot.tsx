@@ -22,7 +22,7 @@ const draggable: Draggable<State> = ({ state, d }) => (
     cy={0}
     r={50}
     fill="lightblue"
-    dragology={() => d.vary(state, [param("angle"), param("scaleX")])}
+    dragologyOnDrag={() => d.vary(state, [param("angle"), param("scaleX")])}
   />
 );
 

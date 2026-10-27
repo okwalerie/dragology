@@ -71,7 +71,7 @@ const draggable: Draggable<State> = ({ state, d }) => {
           strokeWidth={2}
           transform={translate(car.x * TILE_SIZE, car.y * TILE_SIZE)}
           dragologyZIndex={5}
-          dragology={() => {
+          dragologyOnDrag={() => {
             const nextStates: State[] = [state];
 
             function tryMove(dx: number, dy: number) {

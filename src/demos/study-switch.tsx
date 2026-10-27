@@ -5,9 +5,9 @@ import { translate } from "../svgx/helpers";
 
 type State = { status: "on" | "off" };
 
-const initialState: State = { status: "off" };
+export const initialState: State = { status: "off" };
 
-const draggable: Draggable<State> = ({ state, d }) => (
+export const draggable: Draggable<State> = ({ state, d }) => (
   <g transform={translate(50, 50)}>
     {/* Track */}
     <rect
@@ -25,7 +25,7 @@ const draggable: Draggable<State> = ({ state, d }) => (
       stroke="#e5e7eb"
       strokeWidth={1}
       filter="url(#shadow)"
-      dragology={() => d.between([{ status: "off" }, { status: "on" }])}
+      dragologyOnDrag={() => d.between([{ status: "off" }, { status: "on" }])}
     />
 
     {/* Drop-shadow filter */}

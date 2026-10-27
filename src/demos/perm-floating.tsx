@@ -25,7 +25,7 @@ const draggable: Draggable<State> = ({ state, d }) => {
           <g
             id={p}
             transform={translate(idx * TILE_SIZE, 0)}
-            dragology={() => {
+            dragologyOnDrag={() => {
               const stateWithout = produce(state, (draft) => {
                 draft.perm.splice(idx, 1);
               });
@@ -72,6 +72,6 @@ export default demo(
     />
   ),
   {
-    tags: ["d.closest", "spec.withFloating", "spec.whenFar", "reordering"],
+    tags: ["d.closest", "spec.whenFar", "spec.withFloating", "reordering"],
   },
 );

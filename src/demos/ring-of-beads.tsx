@@ -50,7 +50,7 @@ function makeDraggable(stage: Stage): Draggable<State> {
               id={bead}
               transform={translate(p)}
               dragologyZIndex={isDragged ? 2 : 1}
-              dragology={() => {
+              dragologyOnDrag={() => {
                 const newStates = Array.from({ length: n }, (_, targetIdx) => {
                   const newState = structuredClone(state);
                   newState.beads.splice(idx, 1);
@@ -68,7 +68,7 @@ function makeDraggable(stage: Stage): Draggable<State> {
                     removedState.beads.splice(idx, 1);
                     return d
                       .closest(newStates)
-                      .whenFar(d.fixed(removedState).onDrop(state))
+                      .whenFar(d.fixed(removedState).onDrop(state), { gap: 65 })
                       .withFloating();
                   case "d.between()":
                     return d.between(newStates);
@@ -113,6 +113,8 @@ function makeDraggable(stage: Stage): Draggable<State> {
   };
 }
 
+export { initialState, makeDraggable };
+
 export default demo(
   () => {
     const [stage, setStage] = useState<Stage>("d.closest()");
@@ -136,5 +138,15 @@ export default demo(
       </DemoWithConfig>
     );
   },
-  { tags: ["d.closest", "spec.withFloating", "spec.whenFar", "reordering"] },
+  {
+    tags: [
+      "d.between",
+      "d.closest",
+      "d.fixed",
+      "spec.onDrop",
+      "spec.whenFar",
+      "spec.withFloating [while missing]",
+      "reordering",
+    ],
+  },
 );

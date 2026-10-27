@@ -9,7 +9,7 @@ import { translate } from "../svgx/helpers";
 type Block = { id: string; pos: number; track: number; color: string };
 type State = { blocks: Block[] };
 
-const initialState: State = {
+export const initialState: State = {
   blocks: [
     { id: "Cats", pos: 10, track: 0, color: "#3b82f6" },
     { id: "Dogs", pos: 100, track: 1, color: "#ef4444" },
@@ -23,7 +23,7 @@ const GAP = 6;
 const BLOCK_W = 80;
 const TRACK_W = 340;
 
-const draggable: Draggable<State> = ({ state, d, draggedId }) => (
+export const draggable: Draggable<State> = ({ state, d, draggedId }) => (
   <g transform={translate(10, 10)}>
     {/* Track backgrounds */}
     {_.range(NUM_TRACKS).map((t) => (
@@ -46,7 +46,7 @@ const draggable: Draggable<State> = ({ state, d, draggedId }) => (
           id={block.id}
           transform={translate(block.pos, block.track * (TRACK_H + GAP))}
           dragologyZIndex={isDragged ? 1 : 0}
-          dragology={() =>
+          dragologyOnDrag={() =>
             d
               .closest(
                 _.range(NUM_TRACKS).map((t) =>
@@ -59,7 +59,7 @@ const draggable: Draggable<State> = ({ state, d, draggedId }) => (
                     param("blocks", i, "pos"),
                     {
                       constraint: (s) =>
-                        inOrder(0, s.blocks[i].pos, TRACK_W - BLOCK_W),
+                        inOrder([0, s.blocks[i].pos, TRACK_W - BLOCK_W]),
                     },
                   ),
                 ),
@@ -108,6 +108,6 @@ export default demo(
     />
   ),
   {
-    tags: ["d.vary [w/constraint]", "d.closest", "spec.withBranchTransition"],
+    tags: ["d.closest", "d.vary [constraint]", "spec.withBranchTransition"],
   },
 );

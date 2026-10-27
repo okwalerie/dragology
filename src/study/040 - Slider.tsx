@@ -28,9 +28,9 @@ const draggable: Draggable<State> = ({ state, d }) => (
       stroke="#d1d5db"
       strokeWidth={1.5}
       filter="url(#shadow)"
-      dragology={() =>
+      dragologyOnDrag={() =>
         d.vary(state, param("value"), {
-          constraint: (s) => inOrder(0, s.value, W),
+          constraint: (s) => inOrder([0, s.value, W]),
         })
       }
     />

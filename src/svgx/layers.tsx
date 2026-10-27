@@ -1,16 +1,28 @@
-import React, { cloneElement, Fragment } from "react";
-import { FindElementResult, Svgx, updateElement, updatePropsDownTree } from ".";
+import { cloneElement, Fragment } from "react";
+import {
+  FindElementResult,
+  isComponentElement,
+  Svgx,
+  SvgxProps,
+  updateElement,
+  updatePropsDownTree,
+} from ".";
 import { ErrorWithJSX } from "../ErrorBoundary";
 import { assert } from "../utils/assert";
 import { objectKeys } from "../utils/js";
 import { findByPath } from "./path";
 import { combineTransforms } from "./transform";
 
+export type Layer = {
+  element: Svgx;
+  stackingPath: number[];
+};
+
 export type LayeredSvgx = {
   /**
-   * Svgx nodes keyed by ID (or "" for root).
+   * Layers keyed by ID (or "" for root).
    */
-  byId: Map<string, Svgx>;
+  byId: Map<string, Layer>;
   /**
    * Map of ID to its set of descendents' IDs (including
    * transitively). Will be null if we did wacky stuff to the
@@ -31,7 +43,7 @@ export type LayeredSvgx = {
  * - Recurses into nodes with IDs to find deeper IDs
  */
 export function layerSvg(element: Svgx): LayeredSvgx {
-  let byId = new Map<string, Svgx>();
+  let byId = new Map<string, Layer>();
   const descendents = new Map<string, Set<string>>();
   const rootWithExtractedRemoved = extractIdNodes(
     element,
@@ -39,12 +51,25 @@ export function layerSvg(element: Svgx): LayeredSvgx {
     descendents,
     null,
     "",
+    1,
+    [],
   );
   if (rootWithExtractedRemoved) {
     // we gotta put the root at the beginning of the map
-    byId = new Map([["", rootWithExtractedRemoved], ...byId]);
+    byId = new Map([
+      ["", { element: rootWithExtractedRemoved, stackingPath: [] }],
+      ...byId,
+    ]);
   }
   return { byId, descendents };
+}
+
+function parseAbsoluteZIndex(value: string): number {
+  assert(
+    /^\/(-?\d+)$/.test(value),
+    `Invalid absolute dragologyZIndex "${value}". Expected format: "/<integer>" (e.g. "/5", "/-3").`,
+  );
+  return parseInt(value.slice(1), 10);
 }
 
 /**
@@ -56,10 +81,12 @@ export function layerSvg(element: Svgx): LayeredSvgx {
  */
 function extractIdNodes(
   element: Svgx,
-  byId: Map<string, Svgx>,
+  byId: Map<string, Layer>,
   descendents: Map<string, Set<string>>,
   ancestorId: string | null,
   accumulatedTransform: string,
+  accumulatedOpacity: number,
+  stackingPath: number[],
 ): Svgx | null {
   const props = element.props as any;
 
@@ -70,13 +97,30 @@ function extractIdNodes(
     );
   }
 
-  const currentId = props.id;
+  // On a component element, `id` is the component's own prop (see
+  // assertNoDragologyKeyOnComponent).
+  const currentId = isComponentElement(element) ? undefined : props.id;
   const newAncestorId = currentId || ancestorId;
   const elementTransform = props.transform || "";
   const newAccumulatedTransform = combineTransforms(
     accumulatedTransform,
     elementTransform,
   );
+  const elementOpacity =
+    props.opacity !== undefined ? Number(props.opacity) : 1;
+  const newAccumulatedOpacity = accumulatedOpacity * elementOpacity;
+
+  // Compute the stacking path for this node (if it has an ID).
+  // Every ID'd node appends a step: the provided z-index, or 0 by default.
+  let newStackingPath = stackingPath;
+  if (currentId) {
+    const zIndex = props["dragologyZIndex"];
+    if (typeof zIndex === "string") {
+      newStackingPath = [parseAbsoluteZIndex(zIndex)];
+    } else {
+      newStackingPath = [...stackingPath, zIndex || 0];
+    }
+  }
 
   const newElement = updateElement(element, (child) =>
     extractIdNodes(
@@ -85,6 +129,8 @@ function extractIdNodes(
       descendents,
       newAncestorId,
       newAccumulatedTransform,
+      newAccumulatedOpacity,
+      newStackingPath,
     ),
   );
 
@@ -109,14 +155,41 @@ function extractIdNodes(
       }
     }
 
-    const elementToLayer = cloneElement(newElement, {
+    const layerElement = cloneElement(newElement, {
+      // However many tree passes produced this element (each one
+      // re-keys children), it should reconcile as the same layer.
+      key: currentId,
       transform: newAccumulatedTransform || undefined,
+      opacity: newAccumulatedOpacity !== 1 ? newAccumulatedOpacity : undefined,
     });
 
-    byId.set(currentId, elementToLayer);
+    byId.set(currentId, {
+      element: layerElement,
+      stackingPath: newStackingPath,
+    });
     return null;
   } else {
     return newElement;
+  }
+}
+
+/**
+ * Compare two stacking paths lexicographically. Missing entries are
+ * treated as -ε (infinitesimally below zero): greater than any
+ * negative integer, less than zero.
+ */
+export function compareStackingPaths(a: number[], b: number[]): number {
+  const len = Math.min(a.length, b.length);
+  for (let i = 0; i < len; i++) {
+    if (a[i] !== b[i]) return a[i] - b[i];
+  }
+  if (a.length === b.length) return 0;
+  // One is a prefix of the other. The first extra element decides:
+  // >= 0 means the longer path is greater, < 0 means lesser.
+  if (a.length > b.length) {
+    return a[len] >= 0 ? 1 : -1;
+  } else {
+    return b[len] >= 0 ? -1 : 1;
   }
 }
 
@@ -124,25 +197,23 @@ export function drawLayered(layered: LayeredSvgx): Svgx {
   return (
     <>
       {Array.from(layered.byId.entries())
-        .sort(([_keyA, elemA], [_keyB, elemB]) => {
-          const zIndexA =
-            parseInt((elemA.props as any)["dragologyZIndex"]) || 0;
-          const zIndexB =
-            parseInt((elemB.props as any)["dragologyZIndex"]) || 0;
-          return zIndexA - zIndexB;
-        })
-        .map(([key, element]) => (
+        .sort(([_keyA, layerA], [_keyB, layerB]) =>
+          compareStackingPaths(layerA.stackingPath, layerB.stackingPath),
+        )
+        .map(([key, layer]) => (
           <Fragment key={key}>
-            {updatePropsDownTree(element, (el) => {
+            {updatePropsDownTree(layer.element, (el) => {
               assert(
                 el.type !== Fragment,
                 "Please use <g> rather than <Fragment> / <> in draggables.",
               );
 
               // Strip 'dragologyXYZ' props
-              const newProps: React.SVGProps<SVGElement> = {};
+              const newProps: SvgxProps = {};
               for (const propName of objectKeys(el.props)) {
                 if (propName.startsWith("dragology")) {
+                  // For debugging, uncomment this and get dragology props as data props
+                  // (newProps as any)[`data-${propName}`] = el.props[propName];
                   newProps[propName] = undefined;
                 }
               }
@@ -177,8 +248,8 @@ export function layeredExtract(
   }
 
   // Split byId into extracted and remaining
-  const extractedById = new Map<string, Svgx>();
-  const remainingById = new Map<string, Svgx>();
+  const extractedById = new Map<string, Layer>();
+  const remainingById = new Map<string, Layer>();
   for (const [key, value] of layered.byId.entries()) {
     if (extractedIds.has(key)) {
       extractedById.set(key, value);
@@ -220,7 +291,7 @@ export function layeredExtract(
 }
 
 export function layeredMerge(h1: LayeredSvgx, h2: LayeredSvgx): LayeredSvgx {
-  const mergedById = new Map<string, Svgx>(h1.byId);
+  const mergedById = new Map<string, Layer>(h1.byId);
   for (const [key, value] of h2.byId.entries()) {
     assert(
       !mergedById.has(key),
@@ -235,15 +306,15 @@ export function layeredTransform(
   layered: LayeredSvgx,
   transform: string,
 ): LayeredSvgx {
-  const transformedById = new Map<string, Svgx>();
-  for (const [key, element] of layered.byId.entries()) {
-    const props = element.props as any;
+  const transformedById = new Map<string, Layer>();
+  for (const [key, layer] of layered.byId.entries()) {
+    const props = layer.element.props as any;
     const elementTransform = props.transform || "";
     const newTransform = combineTransforms(transform, elementTransform);
-    const transformedElement = cloneElement(element, {
+    const transformedElement = cloneElement(layer.element, {
       transform: newTransform || undefined,
     });
-    transformedById.set(key, transformedElement);
+    transformedById.set(key, { ...layer, element: transformedElement });
   }
   return { byId: transformedById, descendents: layered.descendents };
 }
@@ -252,14 +323,14 @@ export function layeredPrefixIds(
   layered: LayeredSvgx,
   prefix: string,
 ): LayeredSvgx {
-  const prefixedById = new Map<string, Svgx>();
-  for (const [key, element] of layered.byId.entries()) {
+  const prefixedById = new Map<string, Layer>();
+  for (const [key, layer] of layered.byId.entries()) {
     const newId = prefix + key;
-    const prefixedElement = cloneElement(element, {
+    const prefixedElement = cloneElement(layer.element, {
       id: newId,
       ["data-path" as any]: newId + "/",
     });
-    prefixedById.set(newId, prefixedElement);
+    prefixedById.set(newId, { ...layer, element: prefixedElement });
   }
   return { byId: prefixedById, descendents: null };
 }
@@ -268,26 +339,23 @@ export function layeredShiftZIndices(
   layered: LayeredSvgx,
   shift: number,
 ): LayeredSvgx {
-  const shiftedById = new Map<string, Svgx>();
-  for (const [key, element] of layered.byId.entries()) {
-    const props = element.props as any;
-    const zIndex = parseInt(props["dragologyZIndex"]) || 0;
-    const newZIndex = zIndex + shift;
-    const shiftedElement = cloneElement(element, {
-      dragologyZIndex: newZIndex,
+  const shiftedById = new Map<string, Layer>();
+  for (const [key, layer] of layered.byId.entries()) {
+    shiftedById.set(key, {
+      ...layer,
+      stackingPath: [shift, ...layer.stackingPath],
     });
-    shiftedById.set(key, shiftedElement);
   }
   return { ...layered, byId: shiftedById };
 }
 
 export function layeredSetAttributes(
   layered: LayeredSvgx,
-  attrs: Partial<React.SVGProps<SVGElement>>,
+  attrs: Partial<SvgxProps>,
 ): LayeredSvgx {
-  const newById = new Map<string, Svgx>();
-  for (const [key, element] of layered.byId.entries()) {
-    newById.set(key, cloneElement(element, attrs));
+  const newById = new Map<string, Layer>();
+  for (const [key, layer] of layered.byId.entries()) {
+    newById.set(key, { ...layer, element: cloneElement(layer.element, attrs) });
   }
   return { ...layered, byId: newById };
 }
@@ -296,8 +364,8 @@ export function findByPathInLayered(
   path: string,
   layered: LayeredSvgx,
 ): FindElementResult | null {
-  for (const element of layered.byId.values()) {
-    const found = findByPath(path, element);
+  for (const layer of layered.byId.values()) {
+    const found = findByPath(path, layer.element);
     if (found) return found;
   }
   return null;

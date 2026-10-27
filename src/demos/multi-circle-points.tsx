@@ -59,7 +59,7 @@ const draggable: Draggable<State> = ({ state, d, draggedId }) => {
       {state.circles.map((circle, circleIdx) => {
         const isCircleDragged = draggedId === circle.id;
         return (
-          <g key={circle.id}>
+          <g>
             {/* Circle boundary */}
             <circle
               id={circle.id}
@@ -70,7 +70,7 @@ const draggable: Draggable<State> = ({ state, d, draggedId }) => {
               strokeWidth={isCircleDragged ? 3 : 2}
               strokeDasharray={isCircleDragged ? undefined : "6 4"}
               dragologyZIndex={isCircleDragged ? 2 : 1}
-              dragology={() =>
+              dragologyOnDrag={() =>
                 d.vary(state, [
                   param("circles", circleIdx, "x"),
                   param("circles", circleIdx, "y"),
@@ -116,7 +116,6 @@ const draggable: Draggable<State> = ({ state, d, draggedId }) => {
 
         return (
           <circle
-            key={point.id}
             id={point.id}
             transform={translate(absPos)}
             r={10}
@@ -124,7 +123,7 @@ const draggable: Draggable<State> = ({ state, d, draggedId }) => {
             stroke="white"
             strokeWidth={2}
             dragologyZIndex={isPointDragged ? 10 : 3}
-            dragology={() => d.closest(varySpecs)}
+            dragologyOnDrag={() => d.closest(varySpecs)}
           />
         );
       })}
@@ -141,5 +140,5 @@ export default demo(
       height={350}
     />
   ),
-  { tags: ["d.vary [w/constraint]", "d.closest"] },
+  { tags: ["d.closest", "d.vary [constraint]"] },
 );

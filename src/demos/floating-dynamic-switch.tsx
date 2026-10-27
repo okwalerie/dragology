@@ -23,7 +23,7 @@ const draggable: Draggable<State> = ({ state, d }) => (
       stroke="#e5e7eb"
       strokeWidth={1}
       filter="url(#shadow)"
-      dragology={() =>
+      dragologyOnDrag={() =>
         d.between([{ status: "off" }, { status: "on" }]).withFloating({
           tether: (dist) => Math.sqrt(dist) / 4,
         })
@@ -48,5 +48,5 @@ export default demo(
       height={200}
     />
   ),
-  { tags: ["d.between", "spec.withFloating"] },
+  { tags: ["d.between", "spec.withFloating [tether]"] },
 );

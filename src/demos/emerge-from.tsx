@@ -27,7 +27,7 @@ function draggableFactory(config: Config): Draggable<State> {
         <g
           id="dot"
           transform={translate(state.right ? 200 : 100, 20)}
-          dragology={() => spec}
+          dragologyOnDrag={() => spec}
         >
           <circle r={14} fill="#7cb3f0" stroke="#4a90d9" strokeWidth={2} />
         </g>
@@ -71,5 +71,19 @@ export default demo(
       </DemoWithConfig>
     );
   },
-  { tags: ["d.between", "spec.withSnapRadius"] },
+  {
+    fuzz: [
+      {
+        name: "no snap",
+        draggable: draggableFactory(defaultConfig),
+        initialState,
+      },
+      {
+        name: "snap",
+        draggable: draggableFactory({ snap: true }),
+        initialState,
+      },
+    ],
+    tags: ["d.between", "spec.withSnapRadius", "dragologyEmergeFrom"],
+  },
 );

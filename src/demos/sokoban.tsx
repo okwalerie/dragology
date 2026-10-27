@@ -30,7 +30,7 @@ function makeSokobanState(board: string): State {
   const state: State = {
     w: Math.max(...lines.map((l) => l.length)),
     h: lines.length,
-    player: Vec2(0, 0),
+    player: Vec2(0),
     objects: {},
   };
   lines.forEach((line, y) => {
@@ -120,7 +120,7 @@ function draggableFactory(config: Config): Draggable<State> {
               object.pos.y * TILE_SIZE,
             )}
             dragologyZIndex={object.type === "goal" ? 1 : 0}
-            dragology={
+            dragologyOnDrag={
               config.levelEditable
                 ? () =>
                     d
@@ -148,6 +148,7 @@ function draggableFactory(config: Config): Draggable<State> {
                             ]);
                           })
                           .filter(defined),
+                        { lockPast: 20 },
                       )
                       .withSnapRadius(3, { transition: true, chain: true })
                 : undefined
@@ -191,7 +192,7 @@ function draggableFactory(config: Config): Draggable<State> {
             state.player.y * TILE_SIZE,
           )}
           dragologyZIndex={2}
-          dragology={() =>
+          dragologyOnDrag={() =>
             d
               .closest(
                 (
@@ -233,6 +234,7 @@ function draggableFactory(config: Config): Draggable<State> {
                     ]);
                   })
                   .filter(defined),
+                { lockPast: 20 },
               )
               .withSnapRadius(3, { transition: true, chain: true })
           }
@@ -285,5 +287,5 @@ export default demo(
       </DemoWithConfig>
     );
   },
-  { tags: ["spec.withSnapRadius [w/chain]", "d.between", "puzzle"] },
+  { tags: ["d.between", "spec.withSnapRadius [chain]", "puzzle"] },
 );

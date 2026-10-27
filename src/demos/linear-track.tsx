@@ -29,7 +29,7 @@ const draggable: Draggable<State> = ({ state, d }) => (
       width={SQUARE_SIZE}
       height={SQUARE_SIZE}
       rx={4}
-      dragology={() =>
+      dragologyOnDrag={() =>
         d
           .between([{ value: true }, { value: false }])
           .withSnapRadius(10)
@@ -48,5 +48,5 @@ export default demo(
       height={80}
     />
   ),
-  { tags: ["d.between", "spec.withSnapRadius", "spec.withDropTransition"] },
+  { tags: ["d.between", "spec.withDropTransition", "spec.withSnapRadius"] },
 );

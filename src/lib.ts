@@ -16,20 +16,21 @@ export type { Draggable, DraggableProps, SetState } from "./draggable";
 
 // DragSpec & builder
 export { and, inOrder, lessThan, moreThan, param } from "./DragSpec";
-export type {
-  DragSpec,
-  DragSpecBuilder,
-  DragSpecMethods,
-  FloatingOptions,
-  VaryOptions,
-} from "./DragSpec";
+export type { DragSpec, DragSpecBuilder, DragSpecMethods } from "./DragSpec";
 
 // Transitions
 export type { Transition, TransitionLike } from "./transition";
 
 // SVG helpers
 export type { Svgx } from "./svgx";
-export { path, rotateDeg, rotateRad, scale, translate } from "./svgx/helpers";
+export {
+  draggableLine,
+  path,
+  rotateDeg,
+  rotateRad,
+  scale,
+  translate,
+} from "./svgx/helpers";
 
 // Math
 export { Vec2 } from "./math/vec2";
@@ -43,3 +44,39 @@ export type { PathIn } from "./paths";
 
 // Utility types
 export type { Many } from "./utils/flexible-types";
+
+// Drag behavior (for d.custom and benchmarking)
+export { dragSpecToBehavior } from "./DragBehavior";
+export type {
+  DragBehavior,
+  DragFrame,
+  DragInitContext,
+  DragResult,
+} from "./DragBehavior";
+
+// Writing your own operators and modifiers
+export {
+  getElementPosition,
+  getElementPositionCheap,
+  renderStateReadOnly,
+} from "./DragBehavior";
+export { modifier, operator, resolveDragSpecLike } from "./DragSpec";
+export type { DragSpecData, DragSpecLike } from "./DragSpec";
+export { Modifier, Operator } from "./op";
+export type { Child, OpOverlayVisProps, OpResult, OpTreeViewProps } from "./op";
+export type { LayeredSvgx } from "./svgx/layers";
+// Building blocks for their debug views
+export {
+  Box,
+  OutputThumbnail,
+  Slot,
+  StateThumbnails,
+} from "./DragSpecTreeView";
+export type { RenderedState } from "./DragSpecTreeView";
+export { DistanceLine, OverlayVis } from "./OverlayVis";
+
+// Benchmarking
+export {
+  setupListsInListsBenchmark,
+  setupPivotTableBenchmark,
+} from "./benchmarking";

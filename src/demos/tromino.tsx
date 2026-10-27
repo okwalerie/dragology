@@ -20,7 +20,7 @@ type State = {
 };
 
 const initialState: State = {
-  missingSquare: Vec2(0, 0),
+  missingSquare: Vec2(0),
 };
 
 type Config = {
@@ -64,7 +64,7 @@ function draggableFactory(config: Config): Draggable<State> {
         width={cellSize - 2 * padding}
         height={cellSize - 2 * padding}
         fill="black"
-        dragology={() => {
+        dragologyOnDrag={() => {
           if (config.mazeMode) {
             const singleRotations = singleRotationStates(state, boardLevel);
             return config.snappyMode
@@ -177,7 +177,7 @@ function drawState(state: State, boardLevel: number, cellSize: number) {
             missingSquare:
               !missingLeft && !missingTop
                 ? state.missingSquare.sub(Vec2(halfCount, halfCount))
-                : Vec2(0, 0),
+                : Vec2(0),
           },
           boardLevel - 1,
           cellSize,
@@ -268,13 +268,13 @@ export default demo(
   },
   {
     tags: [
-      "spec.withSnapRadius [w/chain]",
+      "d.between",
+      "d.closest",
+      "spec.withChaining",
+      "spec.withFloating [ghost]",
+      "spec.withSnapRadius [chain]",
       "math",
       "fancy",
-      "d.closest",
-      "spec.withFloating [w/ghost]",
-      "d.between",
-      "spec.withChaining",
       "puzzle",
     ],
   },

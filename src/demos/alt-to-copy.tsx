@@ -36,7 +36,7 @@ const draggable: Draggable<State> = ({ state, d, setState }) => (
           const { [id]: _, ...rest } = state.dots;
           setState({ dots: rest });
         }}
-        dragology={() => {
+        dragologyOnDrag={() => {
           const moveDot = (s: State, dotId: string) =>
             d.vary(s, [param("dots", dotId, "x"), param("dots", dotId, "y")]);
 
@@ -88,6 +88,7 @@ export default demo(
   ),
   {
     tags: [
+      "d.reactTo",
       "d.switchToStateAndFollow",
       "d.vary",
       "keyboard",

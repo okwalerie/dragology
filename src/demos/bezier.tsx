@@ -91,7 +91,7 @@ const draggable: Draggable<State> = ({ state, d, draggedId }) => {
             cy={0}
             r={isDragged ? 8 : 12}
             fill={isDragged ? "rgba(37, 99, 235, 0.3)" : "transparent"}
-            dragology={() =>
+            dragologyOnDrag={() =>
               d.vary(
                 state,
                 [
@@ -116,7 +116,9 @@ const draggable: Draggable<State> = ({ state, d, draggedId }) => {
         fill={draggedId === "control-p1" ? "#f59e0b" : "#fbbf24"}
         stroke="#92400e"
         strokeWidth={2}
-        dragology={() => d.vary(state, [param("p1", "x"), param("p1", "y")])}
+        dragologyOnDrag={() =>
+          d.vary(state, [param("p1", "x"), param("p1", "y")])
+        }
       />
 
       <circle
@@ -128,7 +130,9 @@ const draggable: Draggable<State> = ({ state, d, draggedId }) => {
         fill={draggedId === "control-p2" ? "#f59e0b" : "#fbbf24"}
         stroke="#92400e"
         strokeWidth={2}
-        dragology={() => d.vary(state, [param("p2", "x"), param("p2", "y")])}
+        dragologyOnDrag={() =>
+          d.vary(state, [param("p2", "x"), param("p2", "y")])
+        }
       />
 
       <circle
@@ -140,7 +144,9 @@ const draggable: Draggable<State> = ({ state, d, draggedId }) => {
         fill={draggedId === "endpoint-p0" ? "#dc2626" : "#ef4444"}
         stroke="#7f1d1d"
         strokeWidth={2}
-        dragology={() => d.vary(state, [param("p0", "x"), param("p0", "y")])}
+        dragologyOnDrag={() =>
+          d.vary(state, [param("p0", "x"), param("p0", "y")])
+        }
       />
 
       <circle
@@ -152,7 +158,9 @@ const draggable: Draggable<State> = ({ state, d, draggedId }) => {
         fill={draggedId === "endpoint-p3" ? "#dc2626" : "#ef4444"}
         stroke="#7f1d1d"
         strokeWidth={2}
-        dragology={() => d.vary(state, [param("p3", "x"), param("p3", "y")])}
+        dragologyOnDrag={() =>
+          d.vary(state, [param("p3", "x"), param("p3", "y")])
+        }
       />
 
       <text
@@ -212,5 +220,5 @@ export default demo(
       />
     </div>
   ),
-  { tags: ["math", "d.vary"] },
+  { tags: ["d.vary", "math"] },
 );

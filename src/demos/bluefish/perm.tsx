@@ -24,7 +24,7 @@ const draggable: Draggable<State> = ({ state, d, draggedId }) =>
         const labelName = createName("label");
 
         attach(p, {
-          dragology: () =>
+          dragologyOnDrag: () =>
             d.between(
               state.perm.map((_, idx) =>
                 produce(state, (draft) => {

@@ -61,7 +61,7 @@ const draggable: Draggable<State> = ({ state, d }) => {
         <g
           id={`tile-${key}`}
           transform={translate(tile.x * TILE_SIZE, tile.y * TILE_SIZE)}
-          dragology={() => {
+          dragologyOnDrag={() => {
             const betweens = (
               [
                 [-1, 0],
@@ -127,5 +127,5 @@ export default demo(
       />
     </div>
   ),
-  { tags: ["spec.withSnapRadius [w/chain]", "d.between", "puzzle"] },
+  { tags: ["d.between", "d.closest", "spec.withSnapRadius [chain]", "puzzle"] },
 );

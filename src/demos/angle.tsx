@@ -24,7 +24,7 @@ const draggable: Draggable<State> = ({ state, d }) => {
         transform={translate(knobPos)}
         r={20}
         fill="black"
-        dragology={() => d.vary(state, param("angle"))}
+        dragologyOnDrag={() => d.vary(state, param("angle"))}
       />
       <line
         {...center.xy1()}

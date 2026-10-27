@@ -11,9 +11,10 @@ export type Vec2able =
   | ArrayWithTwoNumbers
   | number;
 
-export function Vec2(xy: Vec2able): Vec2;
-export function Vec2(x: number, y: number): Vec2;
-export function Vec2(xOrXY: number | Vec2able, y?: number): Vec2 {
+export type Vec2Args = [x: number, y: number] | [xy: Vec2able];
+
+export function Vec2(...args: Vec2Args): Vec2 {
+  const [xOrXY, y] = args;
   if (typeof xOrXY === "number") {
     if (y === undefined) {
       return new Vec2Class(xOrXY, xOrXY);
@@ -64,6 +65,11 @@ class Vec2Class {
   ) {}
 
   // # extraction
+
+  *[Symbol.iterator](): Iterator<number> {
+    yield this.x;
+    yield this.y;
+  }
 
   /**
    * Return as a pair [x, y], for splicing into argument lists.
@@ -159,7 +165,7 @@ class Vec2Class {
   }
 
   len(): number {
-    return Math.sqrt(this.len2());
+    return Math.hypot(this.x, this.y);
   }
 
   norm(): Vec2 {
@@ -174,9 +180,17 @@ class Vec2Class {
     return Math.atan2(this.y, this.x);
   }
 
+  angleDeg(): number {
+    return radToDeg(this.angleRad());
+  }
+
   angleToRad(v: Vec2able): number {
     v = Vec2(v);
     return Math.atan2(v.y - this.y, v.x - this.x);
+  }
+
+  angleToDeg(v: Vec2able): number {
+    return radToDeg(this.angleToRad(v));
   }
 
   dist2(v: Vec2able): number {
@@ -215,6 +229,11 @@ class Vec2Class {
     return this.add(v2.sub(this).norm().mul(d));
   }
 
+  /** Rotated a quarter turn: exactly (-y, x). */
+  perp(): Vec2 {
+    return Vec2(-this.y, this.x);
+  }
+
   rotateRad(angleRad: number): Vec2 {
     const cosA = Math.cos(angleRad);
     const sinA = Math.sin(angleRad);
@@ -222,7 +241,7 @@ class Vec2Class {
   }
 
   rotateDeg(angleDeg: number): Vec2 {
-    return this.rotateRad((angleDeg * Math.PI) / 180);
+    return this.rotateRad(degToRad(angleDeg));
   }
 
   round(): Vec2 {
@@ -238,4 +257,12 @@ class Vec2Class {
 
 export function lerp(a: number, b: number, t: number): number {
   return a + (b - a) * t;
+}
+
+export function degToRad(deg: number): number {
+  return (deg * Math.PI) / 180;
+}
+
+export function radToDeg(rad: number): number {
+  return (rad * 180) / Math.PI;
 }

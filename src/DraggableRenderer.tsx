@@ -16,19 +16,21 @@ import {
   dragSpecToBehavior,
 } from "./DragBehavior";
 import { DragSpec } from "./DragSpec";
-import { debugOverlay } from "./DragSpecTraceInfo";
 import { ErrorBoundary } from "./ErrorBoundary";
+import { OverlayVis } from "./OverlayVis";
 import {
   Draggable,
-  getDragSpecCallbackOnElement,
+  getOnDragCallbackOnElement,
   makeDraggableProps,
 } from "./draggable";
-import { Vec2 } from "./math/vec2";
+import { Vec2, type Vec2able } from "./math/vec2";
 import {
   renderDraggableInert,
   renderDraggableInertUnlayered,
 } from "./renderDraggable";
 import { Svgx, findElement, updatePropsDownTree } from "./svgx";
+import { boundsCenter, getLocalBounds } from "./svgx/bounds";
+import { ComponentHost } from "./svgx/componentHost";
 import { LayeredSvgx, drawLayered, layerSvg } from "./svgx/layers";
 import { lerpLayered } from "./svgx/lerp";
 import { assignPaths, findByPath, getPath } from "./svgx/path";
@@ -42,26 +44,25 @@ import {
 import { useAnimationLoop } from "./useAnimationLoop";
 import { CatchToRenderError, useCatchToRenderError } from "./useRenderError";
 import { useStateWithRef } from "./useStateWithRef";
-import { memoGeneric } from "./utils";
-import { assert, assertNever } from "./utils/assert";
+import { assert } from "./utils/assert";
 import { pipe } from "./utils/pipe";
 
 // # Engine state machine
 
-type SpringingFrom = {
+type SpringOrigin = {
   layered: LayeredSvgx;
   time: number;
   transition: Transition;
 };
 
-function makeSpringingFrom(
+function makeSpringOrigin(
   transitionLike: TransitionLike,
   /**
    * We provide this lazily cuz if the transition says "no
    * transition" then we can skip it.
    */
   layeredLazy: () => LayeredSvgx,
-): SpringingFrom | null {
+): SpringOrigin | null {
   const transition = resolveTransitionLike(transitionLike);
   if (transition === false) return null;
   return {
@@ -94,16 +95,16 @@ A bit of terminology about the lifetimes of drags:
 
   A drag span is initialized in a few steps:
 
-  - Get ahold of a DragSpecCallback – extract from rendered SVGX or
-    use a saved one.
-  - Evaluate the DragSpecCallback to get a DragSpec.
+  - Get ahold of a OnDragCallback – extract from rendered SVGX or use
+    a saved one.
+  - Evaluate the OnDragCallback to get a DragSpec.
   - Turn the DragSpec into a DragBehavior using dragSpecToBehavior,
     providing some DragInitContext.
 
 */
 
 export type DragStatus<T extends object> = {
-  springingFrom: SpringingFrom | null;
+  springOrigin: SpringOrigin | null;
 } & (
   | { type: "idle"; state: T; pendingDrag?: PendingDrag<T> }
   | {
@@ -134,6 +135,7 @@ export interface DraggableRendererBaseProps<T extends object> {
   onDragState?: (state: T) => void;
   onDragStatus?: (dragStatus: DragStatus<T>) => void;
   showDebugOverlay?: boolean;
+  showVaryVisualizer?: boolean;
   /**
    * Minimum pointer movement (in px) before a pointerdown becomes a drag.
    * Below this threshold the gesture is treated as a click — the state
@@ -141,6 +143,12 @@ export interface DraggableRendererBaseProps<T extends object> {
    * Set to 0 to start drags immediately (old behavior). Default: 2.
    */
   dragThreshold?: number;
+  /**
+   * Simulate a drag on the element with this ID. The pointer is faked
+   * at the element's center (plus optional offset). The draggable
+   * won't be interactive.
+   */
+  simulateDrag?: { id: string; offset?: Vec2able };
 }
 
 export type DraggableRendererProps<T extends object> =
@@ -198,14 +206,16 @@ function DraggableRendererControlled<T extends object>({
   onDragState,
   onDragStatus,
   showDebugOverlay,
+  showVaryVisualizer,
   dragThreshold = 2,
+  simulateDrag,
 }: DraggableRendererBaseProps<T> & { state: T }) {
   const catchToRenderError = useCatchToRenderError();
 
   const [status, setStatus, statusRef] = useStateWithRef<DragStatus<T>>({
     type: "idle",
     state,
-    springingFrom: null,
+    springOrigin: null,
   });
 
   // Sync internal idle state from props.state (with spring animation).
@@ -219,11 +229,11 @@ function DraggableRendererControlled<T extends object>({
       null,
       false,
     );
-    const currentVisual = runSpring(status.springingFrom, currentRendered);
+    const currentVisual = runSpring(status.springOrigin, currentRendered);
     setStatus({
       ...status,
       state,
-      springingFrom: makeSpringingFrom(true, () => currentVisual),
+      springOrigin: makeSpringOrigin(true, () => currentVisual),
     });
   }
 
@@ -244,10 +254,18 @@ function DraggableRendererControlled<T extends object>({
   }, [status, onDragState]);
 
   const pointerRef = useRef<Vec2 | undefined>(undefined);
+  const pointerOverrideRef = useRef<Vec2 | undefined>(undefined);
+  const getPointer = () => pointerOverrideRef.current ?? pointerRef.current;
   const onDropStateRef = useRef(onDropState);
   onDropStateRef.current = onDropState;
   const onDragStateRef = useRef(onDragState);
   onDragStateRef.current = onDragState;
+
+  // A drag that ends on the element it started on would also fire a
+  // click there (React keeps the element mounted through the drag), so
+  // the click that follows a drop is swallowed. Cleared on the next
+  // pointerdown in case that click never comes.
+  const suppressClickRef = useRef(false);
 
   const [svgElem, setSvgElem] = useState<SVGSVGElement | null>(null);
 
@@ -255,7 +273,14 @@ function DraggableRendererControlled<T extends object>({
     (e: globalThis.PointerEvent) => {
       assert(!!svgElem);
       const rect = svgElem.getBoundingClientRect();
-      const pointer = Vec2(e.clientX - rect.left, e.clientY - rect.top);
+      const scale =
+        svgElem.width.baseVal.value !== 0
+          ? rect.width / svgElem.width.baseVal.value
+          : 1;
+      const pointer = Vec2(
+        (e.clientX - rect.left) / scale,
+        (e.clientY - rect.top) / scale,
+      );
       pointerRef.current = pointer;
       return pointer;
     },
@@ -267,7 +292,7 @@ function DraggableRendererControlled<T extends object>({
     catchToRenderError(() => {
       const result = advanceFrame(
         statusRef.current,
-        pointerRef.current,
+        getPointer(),
         performance.now(),
       );
       if (result) {
@@ -275,6 +300,48 @@ function DraggableRendererControlled<T extends object>({
       }
     }),
   );
+
+  // Simulated drag: initialize a drag on the target element (assumed
+  // constant). THIS IS IMPLEMENTED AS A HACK FOR DEVELOPMENT --
+  // maybe there should be a beefier version of it someday.
+  if (simulateDrag && status.type === "idle" && !status.pendingDrag) {
+    const simId = simulateDrag.id;
+    const simOffset = simulateDrag.offset
+      ? Vec2(simulateDrag.offset)
+      : Vec2(0, 0);
+    const content = renderDraggableInertUnlayered(
+      draggable,
+      state,
+      simId,
+      true,
+    );
+    const found = findElement(content, (el) => el.props.id === simId);
+    if (found) {
+      const localBounds = getLocalBounds(found.element);
+      if (!localBounds.empty) {
+        const center = boundsCenter(localBounds);
+        const pointer = localToGlobal(found.accumulatedTransform, center).add(
+          simOffset,
+        );
+        pointerOverrideRef.current = pointer;
+
+        const dragSpec = getOnDragCallbackOnElement<T>(found.element)?.();
+        const draggedPath = getPath(found.element);
+        if (dragSpec && draggedPath) {
+          const behaviorCtx: DragInitContext<T> = {
+            draggable,
+            draggedPath,
+            draggedId: simId,
+            anchorPos: center,
+            startState: state,
+            debug: { varyVisualizer: false },
+          };
+          const frame: DragFrame = { pointer };
+          setStatus(initDrag(dragSpec, behaviorCtx, state, frame, null));
+        }
+      }
+    }
+  }
 
   // Cursor style
   useEffect(() => {
@@ -284,8 +351,9 @@ function DraggableRendererControlled<T extends object>({
 
   // Document-level pointer listeners during drag or pending drag
   const shouldListenToPointer =
-    status.type === "dragging" ||
-    (status.type === "idle" && !!status.pendingDrag);
+    !simulateDrag &&
+    (status.type === "dragging" ||
+      (status.type === "idle" && !!status.pendingDrag));
   useEffect(() => {
     if (!shouldListenToPointer) return;
 
@@ -313,13 +381,14 @@ function DraggableRendererControlled<T extends object>({
         const newState: DragStatus<T> = {
           type: "idle",
           state: status.state,
-          springingFrom: status.springingFrom,
+          springOrigin: status.springOrigin,
         };
         setStatus(newState);
         return;
       }
 
       if (status.type !== "dragging") return;
+      suppressClickRef.current = true;
       const pointer = setPointerFromEvent(e);
 
       const frame: DragFrame = { pointer };
@@ -329,8 +398,8 @@ function DraggableRendererControlled<T extends object>({
       const newState: DragStatus<T> = {
         type: "idle",
         state: dropState,
-        springingFrom: makeSpringingFrom(result.dropTransition, () =>
-          runSpring(status.springingFrom, result.preview),
+        springOrigin: makeSpringOrigin(result.dropTransition, () =>
+          runSpring(status.springOrigin, result.preview()),
         ),
       };
       setStatus(newState);
@@ -360,6 +429,8 @@ function DraggableRendererControlled<T extends object>({
       setStatus,
       onDropState,
       dragThreshold,
+      showVaryVisualizer: showVaryVisualizer ?? false,
+      showDebugOverlay: showDebugOverlay ?? false,
     }),
     [
       catchToRenderError,
@@ -368,8 +439,27 @@ function DraggableRendererControlled<T extends object>({
       onDropState,
       setStatus,
       setPointerFromEvent,
+      showVaryVisualizer,
+      showDebugOverlay,
     ],
   );
+
+  // Both modes draw into the same place with the same structure, so
+  // React keeps each layer (keyed by id) mounted when a drag starts or
+  // ends. Memoized so an unrelated re-render while idle doesn't call
+  // the draggable again.
+  const componentHost = useRef<ComponentHost | null>(null);
+  componentHost.current ??= new ComponentHost();
+  const drawn = useMemo(() => {
+    const { layered, portals } = componentHost.current!.frame(
+      status.type === "idle"
+        ? renderIdleMode(status, renderCtx)
+        : runSpring(status.springOrigin, status.result.preview()),
+      status.type === "dragging",
+    );
+    return { layers: drawLayered(layered), portals };
+  }, [status, renderCtx]);
+  const pointer = getPointer();
 
   return (
     <svg
@@ -377,18 +467,38 @@ function DraggableRendererControlled<T extends object>({
       width={width}
       height={height}
       xmlns="http://www.w3.org/2000/svg"
-      style={{ overflow: "visible", userSelect: "none", touchAction: "none" }}
+      style={{
+        overflow: "visible",
+        userSelect: "none",
+        touchAction: "none",
+        ...(simulateDrag ? { pointerEvents: "none" } : {}),
+      }}
+      onPointerDownCapture={() => {
+        suppressClickRef.current = false;
+      }}
+      onClickCapture={(e) => {
+        if (!suppressClickRef.current) return;
+        suppressClickRef.current = false;
+        e.stopPropagation();
+      }}
     >
-      {status.type === "idle" ? (
-        <DrawIdleMode status={status} ctx={renderCtx} />
-      ) : status.type === "dragging" ? (
-        <DrawDraggingMode
-          status={status}
-          showDebugOverlay={showDebugOverlay}
-          pointer={pointerRef.current}
+      {drawn.layers}
+      {drawn.portals}
+      {status.type === "dragging" && showDebugOverlay && pointer && (
+        <ErrorBoundary>
+          <OverlayVis op={status.result.op} />
+        </ErrorBoundary>
+      )}
+      {simulateDrag && pointerOverrideRef.current && (
+        <circle
+          cx={pointerOverrideRef.current.x}
+          cy={pointerOverrideRef.current.y}
+          r={4}
+          fill="red"
+          stroke="white"
+          strokeWidth={1.5}
+          opacity={0.8}
         />
-      ) : (
-        assertNever(status)
       )}
     </svg>
   );
@@ -404,17 +514,18 @@ function DraggableRendererControlled<T extends object>({
  * always show the target's version so they track the cursor.
  */
 function runSpring(
-  springingFrom: SpringingFrom | null,
+  springOrigin: SpringOrigin | null,
   target: LayeredSvgx,
 ): LayeredSvgx {
-  if (!springingFrom) return target;
-  const elapsed = performance.now() - springingFrom.time;
-  const t = applyEasing(springingFrom.transition, elapsed);
-  const lerped = lerpLayered(target, springingFrom.layered, 1 - t);
+  if (!springOrigin) return target;
+  const elapsed = performance.now() - springOrigin.time;
+  const t = applyEasing(springOrigin.transition, elapsed);
+  // What can't be blended comes from the target.
+  const lerped = lerpLayered(target, springOrigin.layered, 1 - t, "a");
   // Replace non-transitioning layers with the target's version so they
   // track the cursor without spring lag.
-  for (const [key, element] of lerped.byId.entries()) {
-    if (element.props["dragologyTransition"] === false) {
+  for (const [key, layer] of lerped.byId.entries()) {
+    if (layer.element.props["dragologyTransition"] === false) {
       const targetVal = target.byId.get(key);
       if (targetVal) {
         lerped.byId.set(key, targetVal);
@@ -435,36 +546,35 @@ function advanceFrame<T extends object>(
     const result = status.behavior(frame);
 
     // Handle chaining: restart drag from new state
-    const updatedDs: DragStatusDragging<T> = { ...status, result };
-    const chained = processChainNow(updatedDs, frame);
-    if (chained) return chained;
+    const chained = resolveChainNows(status, frame, result);
+    if (chained !== status) return chained;
 
-    let springingFrom = status.springingFrom;
+    let springOrigin = status.springOrigin;
 
     // Detect activePath change → start new spring from current display
     if (result.activePath !== status.result.activePath) {
-      springingFrom = makeSpringingFrom(result.activePathTransition, () =>
-        runSpring(springingFrom, status.result.preview),
+      springOrigin = makeSpringOrigin(result.activePathTransition, () =>
+        runSpring(springOrigin, status.result.preview()),
       );
     }
 
     // Clear expired spring
     if (
-      springingFrom &&
-      now - springingFrom.time >= springingFrom.transition?.duration!
+      springOrigin &&
+      now - springOrigin.time >= springOrigin.transition?.duration!
     ) {
-      springingFrom = null;
+      springOrigin = null;
     }
 
-    return { ...status, result, springingFrom };
+    return { ...status, result, springOrigin };
   }
 
-  if (status.type === "idle" && status.springingFrom) {
+  if (status.type === "idle" && status.springOrigin) {
     if (
-      now - status.springingFrom.time >=
-      status.springingFrom.transition.duration
+      now - status.springOrigin.time >=
+      status.springOrigin.transition.duration
     ) {
-      return { ...status, springingFrom: null };
+      return { ...status, springOrigin: null };
     }
     // Force re-render so spring progress advances
     return { ...status };
@@ -476,15 +586,15 @@ function advanceFrame<T extends object>(
 /**
  * If a drag result has chainNow set (e.g. from switchToStateAndFollow),
  * process it immediately: find the new element, set up a new drag from it,
- * and return the new drag state. Returns null if no chaining needed.
+ * and return the new drag state. Returns the original status if no chaining needed.
  */
-function processChainNow<T extends object>(
+function resolveChainNows<T extends object>(
   status: DragStatusDragging<T>,
   frame: DragFrame,
-): DragStatusDragging<T> | null {
-  const result = status.result;
+  result: DragResult<T>,
+): DragStatusDragging<T> {
   if (!result.chainNow || _.isEqual(result.dropState, status.startState))
-    return null;
+    return status;
 
   const newState = result.dropState;
   const newDraggedId =
@@ -506,46 +616,34 @@ function processChainNow<T extends object>(
 
   const newDragSpec =
     result.chainNow.followSpec ??
-    getDragSpecCallbackOnElement<T>(found.element)?.();
-  if (!newDragSpec) return null;
+    getOnDragCallbackOnElement<T>(found.element)?.();
+  if (!newDragSpec) return status;
 
-  const newSpringingFrom = makeSpringingFrom(true, () =>
-    runSpring(status.springingFrom, result.preview),
+  // We construct a spring origin to emulate what was rendered here
+  // before. That means: no references to the new `result`!
+  const chainTransition = result.chainNow.transition;
+  const newSpringOrigin = makeSpringOrigin(chainTransition, () =>
+    runSpring(status.springOrigin, status.result.preview()),
   );
 
   const newDraggedPath = getPath(found.element);
   assert(!!newDraggedPath, "Chained element must have a path");
 
-  const pointerLocal = status.behaviorCtx.pointerLocal;
-  const newPointerStart = localToGlobal(
-    found.accumulatedTransform,
-    pointerLocal,
-  );
+  const anchorPos = status.behaviorCtx.anchorPos;
 
-  const chainedResult = initDrag(
+  return initDrag(
     newDragSpec,
     {
       ...status.behaviorCtx,
       draggedPath: newDraggedPath,
       draggedId: newDraggedId,
-      pointerLocal,
-      pointerStart: newPointerStart,
+      anchorPos,
       startState: newState,
     },
     newState,
     frame,
-    newSpringingFrom,
+    newSpringOrigin,
   );
-  // TODO: this is a hack
-  // Don't chain if the new state isn't strictly closer than what we had.
-  // Skip this check for explicit chains (switchToStateAndFollow) which
-  // provide a followSpec — those should always proceed.
-  if (!result.chainNow!.followSpec && chainedResult.result.gap >= result.gap) {
-    return null;
-  }
-  // Try to chain further from the new state.
-  const furtherChained = processChainNow(chainedResult, frame);
-  return furtherChained ?? chainedResult;
 }
 
 function initDrag<T extends object>(
@@ -553,7 +651,7 @@ function initDrag<T extends object>(
   behaviorCtx: DragInitContext<T>,
   state: T,
   frame: DragFrame,
-  springingFrom: SpringingFrom | null,
+  springOrigin: SpringOrigin | null,
 ): DragStatusDragging<T> {
   const behavior = dragSpecToBehavior(spec, behaviorCtx);
   const result = behavior(frame);
@@ -565,14 +663,19 @@ function initDrag<T extends object>(
     specForDropZoneVis: spec,
     behaviorCtx,
     result,
-    springingFrom,
+    springOrigin,
   };
 
-  // If the result chains immediately (e.g. switchToStateAndFollow),
-  // process it now so the first rendered frame is the chained drag,
-  // avoiding a single-frame flash of the intermediate state.
-  const chained = processChainNow(status, frame);
-  if (chained) return chained;
+  // This code used to check for chaining, via:
+  //
+  // return resolveChainNows(status, frame, result);
+  //
+  // That was (maybe?) important because `switchToStateAndFollow`
+  // used chaining, and we wanted the switch to occur without delay.
+  // But now switchToStateAndFollow does its own thing. And we want
+  // to support "chain on every frame" for things like
+  // chain-of-links, which suggests that you only chain once per
+  // frame. So:
 
   return status;
 }
@@ -586,7 +689,24 @@ type RenderContext<T extends object> = {
   setStatus: (ds: DragStatus<T>) => void;
   onDropState?: (state: T) => void;
   dragThreshold: number;
+  showVaryVisualizer: boolean;
+  showDebugOverlay: boolean;
 };
+
+/**
+ * Checks whether the element at `targetPath` or any of its ancestors
+ * in the JSX tree has an onClick or onDoubleClick handler.
+ */
+function ancestorOrSelfHasClickHandler(
+  root: Svgx,
+  targetPath: string,
+): boolean {
+  const found = findByPath(targetPath, root);
+  if (!found) return false;
+  return [...found.ancestors, found.element].some(
+    (el) => el.props.onClick || el.props.onDoubleClick,
+  );
+}
 
 function postProcessForInteraction<T extends object>(
   content: Svgx,
@@ -598,8 +718,8 @@ function postProcessForInteraction<T extends object>(
     withPaths,
     (el) =>
       updatePropsDownTree(el, (el) => {
-        const dragSpecCallback = getDragSpecCallbackOnElement<T>(el);
-        if (!dragSpecCallback) return;
+        const onDragCallback = getOnDragCallbackOnElement<T>(el);
+        if (!onDragCallback) return;
         assert(
           !el.props.onPointerDown,
           "Elements with dragology cannot have onPointerDown (it is overwritten)",
@@ -611,7 +731,7 @@ function postProcessForInteraction<T extends object>(
             e.stopPropagation();
             const pointer = ctx.setPointerFromEvent(e.nativeEvent);
 
-            const dragSpec: DragSpec<T> = dragSpecCallback();
+            const dragSpec: DragSpec<T> = onDragCallback();
             const draggedId = el.props.id ?? null;
             const draggedPath = getPath(el);
             assert(!!draggedPath, "Dragged element must have a path");
@@ -620,7 +740,7 @@ function postProcessForInteraction<T extends object>(
             // via updatePropsDownTree?
             const found = findByPath(draggedPath, withPaths);
             assert(!!found, "Dragged element must be findable by path");
-            const pointerLocal = globalToLocal(
+            const anchorPos = globalToLocal(
               found.accumulatedTransform,
               pointer,
             );
@@ -629,9 +749,9 @@ function postProcessForInteraction<T extends object>(
               draggable: ctx.draggable,
               draggedPath,
               draggedId,
-              pointerLocal,
-              pointerStart: pointer,
+              anchorPos,
               startState: state,
+              debug: { varyVisualizer: ctx.showVaryVisualizer },
             };
 
             const frame: DragFrame = { pointer };
@@ -643,17 +763,19 @@ function postProcessForInteraction<T extends object>(
               null,
             );
 
-            if (
-              ctx.dragThreshold <= 0 ||
-              (!el.props.onClick && !el.props.onDoubleClick)
-            ) {
+            const hasClickHandler = ancestorOrSelfHasClickHandler(
+              withPaths,
+              draggedPath,
+            );
+
+            if (ctx.dragThreshold <= 0 || !hasClickHandler) {
               ctx.setStatus(draggingStatus);
             } else {
               // Stay idle with pending — DOM is preserved, clicks still work.
               ctx.setStatus({
                 type: "idle",
                 state,
-                springingFrom: null,
+                springOrigin: null,
                 pendingDrag: {
                   startClientPos: Vec2(e.clientX, e.clientY),
                   threshold: ctx.dragThreshold,
@@ -670,67 +792,38 @@ function postProcessForInteraction<T extends object>(
 
 // # Render modes
 
-const DrawIdleMode = memoGeneric(
-  <T extends object>({
-    status,
-    ctx,
-  }: {
-    status: DragStatus<T> & { type: "idle" };
-    ctx: RenderContext<T>;
-  }) => {
-    const content = ctx.draggable(
-      makeDraggableProps({
-        state: status.state,
-        draggedId: null,
-        setState: ctx.catchToRenderError(
-          (
-            newState: SetStateAction<T>,
-            { transition }: { transition?: TransitionLike } = {},
-          ) => {
-            const resolved =
-              typeof newState === "function"
-                ? (newState as (prev: T) => T)(status.state)
-                : newState;
-            const newStatus: DragStatus<T> = {
-              type: "idle",
-              state: resolved,
-              springingFrom: makeSpringingFrom(transition, () =>
-                renderDraggableInert(ctx.draggable, status.state, null, false),
-              ),
-            };
-            ctx.setStatus(newStatus);
-            ctx.onDropState?.(resolved);
-          },
-        ),
-        isTracking: false,
-      }),
-    );
+function renderIdleMode<T extends object>(
+  status: DragStatus<T> & { type: "idle" },
+  ctx: RenderContext<T>,
+): LayeredSvgx {
+  const content = ctx.draggable(
+    makeDraggableProps({
+      state: status.state,
+      draggedId: null,
+      setState: ctx.catchToRenderError(
+        (
+          newState: SetStateAction<T>,
+          { transition }: { transition?: TransitionLike } = {},
+        ) => {
+          const resolved =
+            typeof newState === "function"
+              ? (newState as (prev: T) => T)(status.state)
+              : newState;
+          const newStatus: DragStatus<T> = {
+            type: "idle",
+            state: resolved,
+            springOrigin: makeSpringOrigin(transition, () =>
+              renderDraggableInert(ctx.draggable, status.state, null, false),
+            ),
+          };
+          ctx.setStatus(newStatus);
+          ctx.onDropState?.(resolved);
+        },
+      ),
+      isTracking: false,
+    }),
+  );
 
-    const layered = postProcessForInteraction(content, status.state, ctx);
-    return drawLayered(runSpring(status.springingFrom, layered));
-  },
-);
-
-const DrawDraggingMode = memoGeneric(
-  <T extends object>({
-    status,
-    showDebugOverlay,
-    pointer,
-  }: {
-    status: DragStatusDragging<T>;
-    showDebugOverlay?: boolean;
-    pointer?: Vec2;
-  }) => {
-    const rendered = runSpring(status.springingFrom, status.result.preview);
-    return (
-      <>
-        {drawLayered(rendered)}
-        {showDebugOverlay && pointer && (
-          <ErrorBoundary>
-            {debugOverlay(status.result.tracedSpec, pointer)}
-          </ErrorBoundary>
-        )}
-      </>
-    );
-  },
-);
+  const layered = postProcessForInteraction(content, status.state, ctx);
+  return runSpring(status.springOrigin, layered);
+}

@@ -58,7 +58,7 @@ const draggable: Draggable<State> = ({ state, d }) => {
         transform={translate(state)}
         r={14}
         fill="black"
-        dragology={() =>
+        dragologyOnDrag={() =>
           d.vary(state, [param("x"), param("y")], {
             constraint: (s) => {
               const p = Vec2(s);
@@ -96,5 +96,5 @@ export default demo(
       />
     </>
   ),
-  { tags: ["math", "d.vary [w/constraint]"] },
+  { tags: ["d.vary [constraint]", "math"] },
 );

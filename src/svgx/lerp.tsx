@@ -1,13 +1,21 @@
-import { prettyLog, PrettyPrint } from "@joshuahhh/pretty-print";
-import { rgb } from "d3-color";
+import { PrettyPrint } from "@joshuahhh/pretty-print";
+import { color, rgb } from "d3-color";
 import * as d3Interpolate from "d3-interpolate";
 import { interpolatePath } from "d3-interpolate-path";
 import React, { cloneElement } from "react";
-import { shouldRecurseIntoChildren, Svgx } from ".";
-import { DRAGOLOGY_PROP_NAME } from "../draggable";
+import {
+  childrenToArray,
+  elementName,
+  isComponentElement,
+  isValidSvgx,
+  shouldRecurseIntoChildren,
+  Svgx,
+  SvgxProps,
+} from ".";
 import { ErrorWithJSX } from "../ErrorBoundary";
 import { lerp } from "../math/vec2";
-import { LayeredSvgx } from "./layers";
+import { objectKeys } from "../utils/js";
+import { Layer, LayeredSvgx } from "./layers";
 import { lerpTransformString } from "./transform";
 
 // SVG properties that should be interpolated as colors
@@ -33,7 +41,7 @@ const COLOR_PROPS = new Set([
 // - TODO: Someday this should be configurable!
 const interpolateColor = d3Interpolate.interpolateLab;
 
-const NO_LERP_PROPS = new Set(["pointerEvents"]);
+const NO_LERP_PROPS = new Set(["pointerEvents", "cursor"]);
 
 const DEFAULT_VALUE_FOR_KEY: { [key: string]: any } = {
   opacity: 1,
@@ -158,6 +166,16 @@ function lerpValue(key: string, valA: any, valB: any, t: number): any {
 
     const colorInterp = interpolateColor(valA, valB);
     return colorInterp(t);
+  } else if (
+    (key === "filter" || key === "WebkitFilter") &&
+    typeof valA === "string" &&
+    typeof valB === "string"
+  ) {
+    const result = tryLerpFilter(valA, valB, t);
+    if (result) return result;
+    throw new Error(
+      `Cannot lerp prop "${key}": unrecognized filter values (${valA} vs ${valB})`,
+    );
   } else if (typeof valA === "string" && typeof valB === "string") {
     // Try to parse both as numbers
     const numA = parseFloat(valA);
@@ -169,22 +187,47 @@ function lerpValue(key: string, valA: any, valB: any, t: number): any {
     }
 
     // Non-numeric strings - can't interpolate
+    // TODO: should we just take B?
     throw new Error(
       `Cannot lerp prop "${key}": different non-numeric values (${valA} vs ${valB})`,
     );
   } else {
     // Different non-numeric values
+    // TODO: should we just take B?
     throw new Error(
       `Cannot lerp prop "${key}": different non-numeric values (${valA} vs ${valB})`,
     );
   }
 }
 
+/** Returns a clone of `element` with its opacity scaled by `factor`, or
+ * `null` if the resulting opacity is below a small threshold. Used when an
+ * element appears on only one side of a lerp. */
+function fadeElement(element: Svgx, factor: number): Svgx | null {
+  // A component's props are its own, so it can't take an opacity.
+  if (isComponentElement(element)) return factor >= 0.5 ? element : null;
+  const opacity = +(element.props.opacity ?? 1) * factor;
+  if (opacity <= 1e-3) return null;
+  return cloneElement(element, { opacity });
+}
+
+/**
+ * Which side of a lerp supplies what can't be blended: text content,
+ * event handlers, component props, and so on. A spring passes "a",
+ * its target; `d.between` passes the side holding its nearest state.
+ */
+export type UnblendedFrom = "a" | "b";
+
 /**
  * Lerps between two SVG JSX nodes.
  * Interpolates transforms and recursively lerps children.
  */
-export function lerpSvgx(a: Svgx, b: Svgx, t: number): Svgx {
+export function lerpSvgx(
+  a: Svgx,
+  b: Svgx,
+  t: number,
+  unblendedFrom: UnblendedFrom = "a",
+): Svgx {
   // Elements should be the same type
   if (a.type !== b.type) {
     throw new ErrorWithJSX(
@@ -197,7 +240,7 @@ export function lerpSvgx(a: Svgx, b: Svgx, t: number): Svgx {
           path in the "before" and "after" SVG trees. I don't know how to
           interpolate between those, sorry.
         </p>
-        {a.props.id === b.props.id && (
+        {a.props.id !== undefined && a.props.id === b.props.id && (
           <p style={{ marginBottom: 8 }}>
             (FYI: These elements share the ID{" "}
             <span style={{ fontFamily: "monospace" }}>{a.props.id}</span>. I
@@ -212,25 +255,36 @@ export function lerpSvgx(a: Svgx, b: Svgx, t: number): Svgx {
     );
   }
 
-  const propsA = a.props as any;
-  const propsB = b.props as any;
+  if (isComponentElement(a)) {
+    return lerpComponentElement(a, b, t, unblendedFrom);
+  }
+
+  const propsA = a.props;
+  const propsB = b.props;
+  const fromB = unblendedFrom === "b";
 
   // Lerp transform if present
   const transformA = propsA.transform || "";
   const transformB = propsB.transform || "";
   const lerpedTransform = lerpTransformString(transformA, transformB, t);
 
-  // Lerp numeric props (x, y, width, height, etc.)
-  const lerpedNumericProps: any = {};
-  const allPropKeys = new Set([...Object.keys(propsA), ...Object.keys(propsB)]);
+  // Lerp props
+  const lerpedProps: SvgxProps = {};
+  const allPropKeys = new Set([...objectKeys(propsA), ...objectKeys(propsB)]);
 
   for (const key of allPropKeys) {
     if (key === "children" || key === "transform") continue;
     // TODO: audit handling of data- props
-    if (key.startsWith("data-")) continue;
-    if (key === DRAGOLOGY_PROP_NAME) continue;
-    if (/^on[A-Z]/.test(key)) continue;
-    if (NO_LERP_PROPS.has(key)) continue;
+    if (
+      key.startsWith("data-") ||
+      key.startsWith("dragology") ||
+      /^on[A-Z]/.test(key) ||
+      NO_LERP_PROPS.has(key)
+    ) {
+      // Not blended. (Unset, they come from `a` via cloneElement.)
+      if (fromB) lerpedProps[key] = propsB[key] as any; // too hard to type
+      continue;
+    }
 
     const valA = propsA[key];
     const valB = propsB[key];
@@ -245,11 +299,16 @@ export function lerpSvgx(a: Svgx, b: Svgx, t: number): Svgx {
       const styleB = valB || {};
       const lerpedStyle: any = {};
       const allStyleKeys = new Set([
-        ...Object.keys(styleA),
-        ...Object.keys(styleB),
+        ...objectKeys(styleA),
+        ...objectKeys(styleB),
       ]);
 
       for (const styleKey of allStyleKeys) {
+        if (NO_LERP_PROPS.has(styleKey)) {
+          lerpedStyle[styleKey] = (fromB ? styleB : styleA)[styleKey];
+          continue;
+        }
+
         lerpedStyle[styleKey] = lerpValue(
           styleKey,
           styleA[styleKey],
@@ -258,49 +317,243 @@ export function lerpSvgx(a: Svgx, b: Svgx, t: number): Svgx {
         );
       }
 
-      lerpedNumericProps[key] = lerpedStyle;
+      lerpedProps[key] = lerpedStyle;
     } else {
-      lerpedNumericProps[key] = lerpValue(key, valA, valB, t);
+      lerpedProps[key] = lerpValue(key, valA, valB, t);
     }
   }
 
-  // Lerp children recursively (skip foreignObject children)
-  const childrenA = React.Children.toArray(propsA.children) as Svgx[];
-  const childrenB = React.Children.toArray(propsB.children) as Svgx[];
-
-  let lerpedChildren: Svgx[] = [];
-
+  // For defs and dragologyOpaque elements, take the children whole.
   if (!shouldRecurseIntoChildren(a)) {
-    // For foreignObject, just use children from A
-    lerpedChildren = childrenA;
-  } else if (childrenA.length === childrenB.length) {
-    lerpedChildren = childrenA.map((childA, i) => {
-      const childB = childrenB[i];
-      if (React.isValidElement(childA) && React.isValidElement(childB)) {
-        return lerpSvgx(childA, childB, t);
-      }
-      // For text nodes or other non-element children, just use A
-      return childA;
+    return React.cloneElement(a, {
+      ...lerpedProps,
+      ...(lerpedTransform ? { transform: lerpedTransform } : {}),
+      children: (fromB ? propsB : propsA).children,
     });
-  } else {
-    // Children counts differ
-    prettyLog(childrenA, { label: "Children A" });
-    prettyLog(childrenB, { label: "Children B" });
-    throw new ErrorWithJSX(
-      `Cannot lerp children: different child counts (${childrenA.length} vs ${childrenB.length})`,
-      <div>
-        <PrettyPrint value={a} />
-        <div style={{ marginTop: 16, marginBottom: 16 }}>vs</div>
-        <PrettyPrint value={b} />
-      </div>,
-    );
+  }
+
+  // Lerp children recursively. Besides elements, text content like
+  // strings and numbers can appear (e.g. inside `<text>`/`<tspan>`).
+  type ChildNode = ReturnType<typeof childrenToArray>[number];
+  const childrenA = childrenToArray(propsA.children);
+  const childrenB = childrenToArray(propsB.children);
+
+  const lerpedChildren: ChildNode[] = [];
+
+  // Pair up children into slots. A slot is identified by the same step
+  // that `assignPaths` would use: `dragologyKey` when present, otherwise
+  // the position among unkeyed siblings (as a string). Iteration order
+  // follows A first, then B-only slots at the end — preserving A's tree
+  // order when possible.
+  type Slot = { a?: ChildNode; b?: ChildNode };
+  const slots = new Map<string, Slot>();
+  const addChildren = (children: ChildNode[], side: "a" | "b") => {
+    let unkeyedIdx = 0;
+    for (const child of children) {
+      const dKey = isValidSvgx(child) ? child.props.dragologyKey : undefined;
+      const slotKey = dKey !== undefined ? dKey : String(unkeyedIdx++);
+      const slot = slots.get(slotKey) ?? {};
+      slot[side] = child;
+      slots.set(slotKey, slot);
+    }
+  };
+  addChildren(childrenA, "a");
+  addChildren(childrenB, "b");
+
+  for (const { a: childA, b: childB } of slots.values()) {
+    if (childA !== undefined && childB !== undefined) {
+      if (isValidSvgx(childA) && isValidSvgx(childB)) {
+        lerpedChildren.push(lerpSvgx(childA, childB, t, unblendedFrom));
+      } else {
+        // Non-element (e.g. text node)
+        lerpedChildren.push(fromB ? childB : childA);
+      }
+    } else if (childA !== undefined && isValidSvgx(childA)) {
+      const faded = fadeElement(childA, 1 - t);
+      if (faded) lerpedChildren.push(faded);
+    } else if (childB !== undefined && isValidSvgx(childB)) {
+      const faded = fadeElement(childB, t);
+      if (faded) lerpedChildren.push(faded);
+    }
   }
 
   return React.cloneElement(a, {
-    ...lerpedNumericProps,
+    ...lerpedProps,
     ...(lerpedTransform ? { transform: lerpedTransform } : {}),
     children: lerpedChildren.length === 0 ? undefined : lerpedChildren,
   });
+}
+
+// # Component elements
+
+/**
+ * A component's props mean whatever the component says they mean, so
+ * by default we take them all from the `unblendedFrom` side. Props
+ * named in `dragologyLerpProps` (or all of them, for `true`) are
+ * blended with `lerpData`.
+ */
+function lerpComponentElement(
+  a: Svgx,
+  b: Svgx,
+  t: number,
+  unblendedFrom: UnblendedFrom,
+): Svgx {
+  const fromB = unblendedFrom === "b";
+  // Keep `a`'s key either way, so React sees the same element.
+  const base = fromB ? cloneElement(b, { key: a.key ?? undefined }) : a;
+  const { dragologyLerpProps: lerpProps } =
+    base.props as React.JSX.IntrinsicAttributes;
+  if (!lerpProps) return base;
+
+  const keys =
+    lerpProps === true
+      ? new Set([...objectKeys(a.props), ...objectKeys(b.props)])
+      : lerpProps;
+  if (lerpProps !== true) warnAboutUnknownLerpProps(keys, a, b);
+  const lerped: Record<string, unknown> = {};
+  for (const key of keys) {
+    if (
+      key === "children" ||
+      key.startsWith("data-") ||
+      key.startsWith("dragology") ||
+      typeof a.props[key as keyof SvgxProps] === "function"
+    ) {
+      continue;
+    }
+    lerped[key] = lerpData(
+      key,
+      a.props[key as keyof SvgxProps],
+      b.props[key as keyof SvgxProps],
+      t,
+      fromB,
+    );
+  }
+  return cloneElement(base, lerped);
+}
+
+const warnedLerpProps = new Set<string>();
+
+/** Catches typos in dragologyLerpProps. Warns once per component & prop. */
+function warnAboutUnknownLerpProps(
+  keys: Iterable<string>,
+  a: Svgx,
+  b: Svgx,
+): void {
+  for (const key of keys) {
+    if (key in a.props || key in b.props) continue;
+    const id = `${elementName(a)}.${key}`;
+    if (warnedLerpProps.has(id)) continue;
+    warnedLerpProps.add(id);
+    console.warn(
+      `dragologyLerpProps on <${elementName(a)}> lists "${key}", ` +
+        `but it has no prop by that name.`,
+    );
+  }
+}
+
+/**
+ * Lerps plain data: numbers, colors, and anything `lerpValue` handles,
+ * recursing into same-length arrays and same-keyed plain objects.
+ * Anything else comes from one side (`b` if `fromB`) rather than
+ * throwing.
+ */
+function lerpData(
+  key: string,
+  valA: unknown,
+  valB: unknown,
+  t: number,
+  fromB: boolean,
+): unknown {
+  if (valA === valB) return valA;
+  const unblended = fromB ? valB : valA;
+  if (Array.isArray(valA) && Array.isArray(valB)) {
+    if (valA.length !== valB.length) return unblended;
+    return valA.map((v, i) => lerpData(key, v, valB[i], t, fromB));
+  }
+  if (isPlainObject(valA) && isPlainObject(valB)) {
+    const keysA = Object.keys(valA);
+    const keysB = Object.keys(valB);
+    if (
+      keysA.length !== keysB.length ||
+      !keysA.every((k) => Object.hasOwn(valB, k))
+    ) {
+      return unblended;
+    }
+    return Object.fromEntries(
+      keysA.map((k) => [k, lerpData(k, valA[k], valB[k], t, fromB)]),
+    );
+  }
+  if (
+    typeof valA === "string" &&
+    typeof valB === "string" &&
+    color(valA) &&
+    color(valB)
+  ) {
+    return interpolateColor(valA, valB)(t);
+  }
+  try {
+    return lerpValue(key, valA, valB, t);
+  } catch {
+    return unblended;
+  }
+}
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  if (typeof v !== "object" || v === null) return false;
+  const proto = Object.getPrototypeOf(v);
+  return proto === Object.prototype || proto === null;
+}
+
+// # CSS filter interpolation
+
+type DropShadow = {
+  offsetX: number;
+  offsetY: number;
+  blur: number;
+  r: number;
+  g: number;
+  b: number;
+  a: number;
+};
+
+const DROP_SHADOW_RE =
+  /^drop-shadow\(\s*([\d.+-]+)(?:px)?\s+([\d.+-]+)(?:px)?\s+([\d.+-]+)(?:px)?\s+rgba\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*\)\s*\)$/;
+
+function parseDropShadow(s: string): DropShadow | null {
+  const m = s.match(DROP_SHADOW_RE);
+  if (!m) return null;
+  return {
+    offsetX: parseFloat(m[1]),
+    offsetY: parseFloat(m[2]),
+    blur: parseFloat(m[3]),
+    r: parseFloat(m[4]),
+    g: parseFloat(m[5]),
+    b: parseFloat(m[6]),
+    a: parseFloat(m[7]),
+  };
+}
+
+function serializeDropShadow(ds: DropShadow): string {
+  return `drop-shadow(${ds.offsetX}px ${ds.offsetY}px ${ds.blur}px rgba(${ds.r},${ds.g},${ds.b},${ds.a}))`;
+}
+
+function lerpDropShadow(a: DropShadow, b: DropShadow, t: number): string {
+  return serializeDropShadow({
+    offsetX: lerp(a.offsetX, b.offsetX, t),
+    offsetY: lerp(a.offsetY, b.offsetY, t),
+    blur: lerp(a.blur, b.blur, t),
+    r: lerp(a.r, b.r, t),
+    g: lerp(a.g, b.g, t),
+    b: lerp(a.b, b.b, t),
+    a: lerp(a.a, b.a, t),
+  });
+}
+
+function tryLerpFilter(a: string, b: string, t: number): string | null {
+  const dsA = parseDropShadow(a);
+  const dsB = parseDropShadow(b);
+  if (dsA && dsB) return lerpDropShadow(dsA, dsB, t);
+  return null;
 }
 
 // # Emerge animation support
@@ -313,9 +566,7 @@ type EmergeBounds = {
 
 /** Finds the first <rect>'s dimensions and first <text>'s y position (direct children only). */
 function findEmergeBounds(element: Svgx): EmergeBounds | null {
-  const children = React.Children.toArray(
-    (element.props as any).children,
-  ) as Svgx[];
+  const children = React.Children.toArray(element.props.children) as Svgx[];
 
   let rectWidth: number | null = null;
   let rectHeight: number | null = null;
@@ -323,6 +574,7 @@ function findEmergeBounds(element: Svgx): EmergeBounds | null {
 
   for (const child of children) {
     if (React.isValidElement(child)) {
+      // TODO: fix "as any" below
       if (child.type === "rect" && rectWidth === null) {
         const props = child.props as any;
         rectWidth = parseFloat(props.width);
@@ -351,7 +603,7 @@ function findEmergeBounds(element: Svgx): EmergeBounds | null {
 
 /** Clone element with modified first <rect> dimensions and first <text> y. */
 function cloneWithBounds(element: Svgx, bounds: EmergeBounds): Svgx {
-  const props = element.props as any;
+  const props = element.props;
   const children = React.Children.toArray(props.children) as Svgx[];
 
   let foundRect = false;
@@ -379,13 +631,13 @@ function cloneWithBounds(element: Svgx, bounds: EmergeBounds): Svgx {
  * Creates a synthetic "before" version of an emerging element.
  *
  * Strategy:
- * 1. If data-emerge-mode="clone", position at origin with full opacity (split/merge)
+ * 1. If dragologyEmergeMode="clone", position at origin with full opacity (split/merge)
  * 2. If both elements have rect+text structure, use bounds interpolation
  * 3. Otherwise, fall back to transform scale(0) + opacity 0
  */
 function createSyntheticBefore(newElement: Svgx, originElement: Svgx): Svgx {
-  const originTransform = (originElement.props as any).transform || "";
-  const emergeMode = (newElement.props as any)["data-emerge-mode"];
+  const originTransform = originElement.props.transform || "";
+  const emergeMode = newElement.props.dragologyEmergeMode;
 
   if (emergeMode === "clone") {
     const originBounds = findEmergeBounds(originElement);
@@ -427,19 +679,20 @@ function createSyntheticBefore(newElement: Svgx, originElement: Svgx): Svgx {
  * using the referenced origin element from `origins`.
  */
 function augmentWithEmerging(
-  target: Map<string, Svgx>,
-  source: Map<string, Svgx>,
-  origins: Map<string, Svgx>,
+  target: Map<string, Layer>,
+  source: Map<string, Layer>,
+  origins: Map<string, Layer>,
 ) {
   for (const [key, val] of source) {
     if (!target.has(key)) {
-      const emergeFromId = (val.props as Record<string, unknown>)[
-        "dragologyEmergeFrom"
-      ];
+      const emergeFromId = val.element.props.dragologyEmergeFrom;
       if (emergeFromId && typeof emergeFromId === "string") {
-        const originElement = origins.get(emergeFromId);
-        if (originElement) {
-          target.set(key, createSyntheticBefore(val, originElement));
+        const originLayer = origins.get(emergeFromId);
+        if (originLayer) {
+          target.set(key, {
+            element: createSyntheticBefore(val.element, originLayer.element),
+            stackingPath: val.stackingPath,
+          });
         }
       }
     }
@@ -450,6 +703,7 @@ export function lerpLayered(
   a: LayeredSvgx,
   b: LayeredSvgx,
   t: number,
+  unblendedFrom: UnblendedFrom,
 ): LayeredSvgx {
   // Preprocess: inject synthetic versions of emerging elements in BOTH directions.
   // Bidirectional handling is needed because Delaunay interpolation can flip direction.
@@ -459,7 +713,7 @@ export function lerpLayered(
   augmentWithEmerging(augmentedB, a.byId, b.byId);
 
   // Main lerp loop
-  const result = new Map<string, Svgx>();
+  const result = new Map<string, Layer>();
   const allKeys = new Set([...augmentedA.keys(), ...augmentedB.keys()]);
 
   for (const key of allKeys) {
@@ -467,13 +721,18 @@ export function lerpLayered(
     const bVal = augmentedB.get(key);
 
     if (aVal && bVal) {
-      result.set(key, lerpSvgx(aVal, bVal, t));
+      result.set(key, {
+        element: lerpSvgx(aVal.element, bVal.element, t, unblendedFrom),
+        stackingPath: (unblendedFrom === "b" ? bVal : aVal).stackingPath,
+      });
     } else if (aVal) {
-      const opacity = +(aVal.props.opacity ?? 1) * (1 - t);
-      if (opacity > 1e-3) result.set(key, cloneElement(aVal, { opacity }));
+      const faded = fadeElement(aVal.element, 1 - t);
+      if (faded)
+        result.set(key, { element: faded, stackingPath: aVal.stackingPath });
     } else if (bVal) {
-      const opacity = +(bVal.props.opacity ?? 1) * t;
-      if (opacity > 1e-3) result.set(key, cloneElement(bVal, { opacity }));
+      const faded = fadeElement(bVal.element, t);
+      if (faded)
+        result.set(key, { element: faded, stackingPath: bVal.stackingPath });
     }
   }
 
@@ -516,6 +775,12 @@ export function lerpLayeredWeighted(
   if (entries.length === 0) return items[0];
   if (entries.length === 1) return items[entries[0][0]];
 
+  // What can't be blended comes from the nearest (heaviest) state;
+  // ties go to the earlier one.
+  const nearestIdx = entries.reduce((best, e) =>
+    e[1] > best[1] ? e : best,
+  )[0];
+
   // Fold pairwise: accumulate = lerp(accumulate, next, next_weight / remaining_weight)
   let acc = items[entries[0][0]];
   let accWeight = entries[0][1];
@@ -523,7 +788,8 @@ export function lerpLayeredWeighted(
   for (let i = 1; i < entries.length; i++) {
     const [idx, w] = entries[i];
     const t = w / (accWeight + w);
-    acc = lerpLayered(acc, items[idx], t);
+    // `acc` holds the nearest state once it's been folded in.
+    acc = lerpLayered(acc, items[idx], t, idx === nearestIdx ? "b" : "a");
     accWeight += w;
   }
 

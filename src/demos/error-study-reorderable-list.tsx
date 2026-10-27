@@ -18,7 +18,7 @@ const draggable: Draggable<State> = ({ state, d }) => (
     {state.items.map((item, i) => (
       <g
         transform={translate(0, i * (H + GAP))}
-        dragology={() => {
+        dragologyOnDrag={() => {
           const newStates = state.items.map((_item, j) => ({
             items: moveItem(state.items, i, j),
           }));
@@ -64,8 +64,10 @@ export default demo(
     </div>
   ),
   {
-    tags: ["error"],
+    tags: ["d.between", "error"],
     hideByDefault: true,
+    // deliberately broken
+    fuzz: false,
   },
 );
 

@@ -35,7 +35,7 @@ const draggable: Draggable<State> = ({ state, d, setState }) => (
           const { [id]: _, ...rest } = state.dots;
           setState({ dots: rest });
         }}
-        dragology={() => {
+        dragologyOnDrag={() => {
           const copyId = makeId();
           const newState: State = {
             dots: {

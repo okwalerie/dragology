@@ -11,7 +11,7 @@ import { translate } from "../svgx/helpers";
 
 type State = { name: "r" | "g" | "b" };
 
-const initialState: State = { name: "r" };
+export const initialState: State = { name: "r" };
 
 const POS = {
   r: { x: 50, y: 20 },
@@ -25,7 +25,10 @@ const COLOR = {
   b: "#3b82f6",
 };
 
-const makeDraggable = (useFloating: boolean): Draggable<State> => {
+export const makeDraggable = (
+  useFloating: boolean,
+  clockwiseOnly: boolean,
+): Draggable<State> => {
   const states = [{ name: "r" }, { name: "g" }, { name: "b" }] as const;
   return ({ state, d }) => (
     <g transform={translate(60, 30)}>
@@ -48,8 +51,15 @@ const makeDraggable = (useFloating: boolean): Draggable<State> => {
         stroke="white"
         strokeWidth={3}
         filter="url(#shadow)"
-        dragology={() => {
-          const spec = d.between(states);
+        dragologyOnDrag={() => {
+          const spec = clockwiseOnly
+            ? (state.name === "r"
+                ? d.between([state, { name: "b" }])
+                : state.name === "b"
+                  ? d.between([state, { name: "g" }])
+                  : d.between([state, { name: "r" }])
+              ).withSnapRadius(15, { chain: true })
+            : d.between(states);
           return useFloating ? spec.withFloating() : spec;
         }}
       />
@@ -67,7 +77,11 @@ const makeDraggable = (useFloating: boolean): Draggable<State> => {
 export default demo(
   () => {
     const [useFloating, setUseFloating] = useState(false);
-    const draggable = useMemo(() => makeDraggable(useFloating), [useFloating]);
+    const [clockwiseOnly, setClockwiseOnly] = useState(false);
+    const draggable = useMemo(
+      () => makeDraggable(useFloating, clockwiseOnly),
+      [useFloating, clockwiseOnly],
+    );
     return (
       <DemoWithConfig>
         <DemoDraggable
@@ -82,9 +96,14 @@ export default demo(
             value={useFloating}
             onChange={setUseFloating}
           />
+          <ConfigCheckbox
+            label="Clockwise drag only (with chaining)"
+            value={clockwiseOnly}
+            onChange={setClockwiseOnly}
+          />
         </ConfigPanel>
       </DemoWithConfig>
     );
   },
-  { tags: ["d.between"] },
+  { tags: ["d.between", "spec.withFloating", "spec.withSnapRadius"] },
 );

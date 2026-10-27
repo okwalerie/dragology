@@ -81,7 +81,7 @@ const draggable: Draggable<State> = ({ state, d, draggedId }) => {
             id={rowId}
             transform={translate(row.x, row.y)}
             dragologyZIndex={isDragged ? 10 : 0}
-            dragology={() =>
+            dragologyOnDrag={() =>
               d.vary(state, [
                 param("rows", rowId, "x"),
                 param("rows", rowId, "y"),
@@ -126,7 +126,7 @@ const draggable: Draggable<State> = ({ state, d, draggedId }) => {
                   ROW_PADDING,
                 )}
                 dragologyZIndex={isDragged ? 11 : 1}
-                dragology={() => {
+                dragologyOnDrag={() => {
                   const stateWithout = produce(state, (draft) => {
                     draft.rows[rowId].items.splice(idx, 1);
                     if (draft.rows[rowId].items.length === 0) {
@@ -211,9 +211,9 @@ export default demo(
   {
     tags: [
       "d.closest",
-      "spec.withFloating",
       "d.vary",
       "spec.whenFar",
+      "spec.withFloating",
       "discrete on top of continuous",
     ],
   },

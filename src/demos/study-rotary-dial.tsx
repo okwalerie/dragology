@@ -7,12 +7,12 @@ import { rotateDeg, translate } from "../svgx/helpers";
 
 type State = { angle: number };
 
-const initialState: State = { angle: 0 };
+export const initialState: State = { angle: 0 };
 
 const R = 60;
 const TICKS = 12;
 
-const draggable: Draggable<State> = ({ state, d }) => (
+export const draggable: Draggable<State> = ({ state, d }) => (
   <g transform={translate(200, 120)}>
     {/* Dial */}
     <g transform={rotateDeg(state.angle - 90)}>
@@ -22,7 +22,7 @@ const draggable: Draggable<State> = ({ state, d }) => (
         stroke="#d1d5db"
         strokeWidth={2}
         filter="url(#shadow)"
-        dragology={() => d.vary(state, param("angle"))}
+        dragologyOnDrag={() => d.vary(state, param("angle"))}
       />
       <line
         x1={0}

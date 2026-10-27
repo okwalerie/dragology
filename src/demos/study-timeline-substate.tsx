@@ -45,13 +45,13 @@ const draggable: Draggable<State> = ({ state, d, draggedId }) => (
           id={block.id}
           transform={translate(block.pos, block.track * (TRACK_H + GAP))}
           dragologyZIndex={isDragged ? 1 : 0}
-          dragology={() =>
+          dragologyOnDrag={() =>
             d.substate(state, ["blocks", i], (d) =>
               d
                 .closest(
                   _.range(NUM_TRACKS).map((t) =>
                     d.vary({ ...block, track: t }, param("pos"), {
-                      constraint: (s) => inOrder(0, s.pos, TRACK_W - BLOCK_W),
+                      constraint: (s) => inOrder([0, s.pos, TRACK_W - BLOCK_W]),
                     }),
                   ),
                 )
@@ -109,9 +109,9 @@ export default demo(
   ),
   {
     tags: [
-      "d.substate",
-      "d.vary [w/constraint]",
       "d.closest",
+      "d.substate",
+      "d.vary [constraint]",
       "spec.withBranchTransition",
     ],
   },

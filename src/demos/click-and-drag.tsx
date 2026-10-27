@@ -39,7 +39,7 @@ const draggable: Draggable<State> = ({ state, d, setState }) => (
           colorIdx: (state.colorIdx + 1) % colors.length,
         });
       }}
-      dragology={() =>
+      dragologyOnDrag={() =>
         d
           .between([
             { ...state, value: true },
@@ -60,5 +60,5 @@ export default demo(
       height={80}
     />
   ),
-  { tags: ["d.between", "setState", "spec.withDropTransition"] },
+  { tags: ["d.between", "spec.withDropTransition", "setState"] },
 );

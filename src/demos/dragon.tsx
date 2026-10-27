@@ -14,7 +14,7 @@ import { param } from "../DragSpec";
 import { inOrder } from "../math/optimization";
 import { Vec2 } from "../math/vec2";
 import { Svgx } from "../svgx";
-import { translate } from "../svgx/helpers";
+import { draggableLine, translate } from "../svgx/helpers";
 
 type State = {
   from: { x: number; y: number };
@@ -46,17 +46,16 @@ function makeDraggable(levels: number, tiltEnabled: boolean): Draggable<State> {
         return [
           <line
             id={id}
-            transform={translate(p1)}
-            {...p2.sub(p1).xy2()}
+            {...draggableLine(p1, p2)}
             stroke="black"
             strokeWidth={4}
             strokeLinecap="round"
-            dragology={() =>
+            dragologyOnDrag={() =>
               d.vary(
                 state,
                 [param("squareness"), tiltEnabled && param("tilt")],
                 {
-                  constraint: (s) => inOrder(-0.8, s.squareness, 0.8),
+                  constraint: (s) => inOrder([-0.8, s.squareness, 0.8]),
                 },
               )
             }
@@ -84,7 +83,7 @@ function makeDraggable(levels: number, tiltEnabled: boolean): Draggable<State> {
           transform={translate(state.from)}
           r={8}
           fill="red"
-          dragology={() =>
+          dragologyOnDrag={() =>
             d.vary(state, [param("from", "x"), param("from", "y")])
           }
         />
@@ -93,7 +92,9 @@ function makeDraggable(levels: number, tiltEnabled: boolean): Draggable<State> {
           transform={translate(state.to)}
           r={8}
           fill="blue"
-          dragology={() => d.vary(state, [param("to", "x"), param("to", "y")])}
+          dragologyOnDrag={() =>
+            d.vary(state, [param("to", "x"), param("to", "y")])
+          }
         />
       </g>
     );

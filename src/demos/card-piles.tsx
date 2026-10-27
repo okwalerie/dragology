@@ -150,7 +150,7 @@ const draggable: Draggable<State> = ({ state, d, draggedId }) => {
               fill="#d1d5db"
               opacity={isDragged ? 0.7 : 0.4}
               dragologyZIndex={0}
-              dragology={() =>
+              dragologyOnDrag={() =>
                 d
                   .vary(state, [
                     param("piles", pileId, "x"),
@@ -178,7 +178,7 @@ const draggable: Draggable<State> = ({ state, d, draggedId }) => {
               stroke="#9ca3af"
               strokeWidth={1.5}
               dragologyZIndex={isDragged ? 2 : 1}
-              dragology={() =>
+              dragologyOnDrag={() =>
                 d
                   .vary(state, [
                     param("piles", pileId, "cards", cardId, "dx"),
@@ -209,5 +209,5 @@ export default demo(
       />
     </>
   ),
-  { tags: ["d.vary", "spec.during"] },
+  { tags: ["spec.during", "d.vary"] },
 );

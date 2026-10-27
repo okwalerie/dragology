@@ -19,7 +19,7 @@ const draggable: Draggable<State> = ({ state, d }) => (
       cy={0}
       r={50}
       fill="lightblue"
-      dragology={() => d.vary(state, [param("scaleX"), param("scaleY")])}
+      dragologyOnDrag={() => d.vary(state, [param("scaleX"), param("scaleY")])}
     />
     <ellipse
       cx={100}

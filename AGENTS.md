@@ -1,179 +1,47 @@
-# Claude Code Workspace Guide
+# Working in the Dragology repo
 
-## Rules
+This repo is the Dragology library (public API: `src/lib.ts`) plus a site of demos built with it.
 
-- NEVER say "Perfect!" or similar overly enthusiastic confirmations.
-- NEVER use `any` as a lazy workaround for type errors. Only use `any` when truly called for. Ask first.
-- NEVER run `npm run dev`. The user will start the dev server when needed.
-- NEVER mention Claude in commit messages.
+**How to use the library** (the `Draggable` model, drag specs, ids and layers, gotchas) is in [docs/AGENTS.md](docs/AGENTS.md), which also ships in the npm package. It's imported at the end of this file; follow it when writing or changing a demo, or anything else that renders through a `Draggable`.
 
-## 1. Working on the Library Codebase
+## Commands
 
-### Development
-
-```bash
-npm install       # Install dependencies
-npm test          # Run tests
-npm run build     # Build
-npm run typecheck # Type check
-```
-
-### Key Files
-
-| File | Purpose |
+| What | Command |
 |---|---|
-| `src/draggable.tsx` | `Draggable<T>` type, `Drag`, `SetState`, `DragologyPropValue` |
-| `src/DraggableRenderer.tsx` | Low-level component that runs a `Draggable` with drag handling, spring animation |
-| `src/DragSpec.tsx` | `DragSpec<T>` union type + constructors (`between`, `fixed`, `floating`, `closest`, `vary`, `onDrop`, `withSnapRadius`, etc.) |
-| `src/demo/ui.tsx` | `DemoDraggable` (wraps `DraggableRenderer` with debug UI), `DemoSettingsProvider`, `DemoSettingsBar`, `ConfigPanel`, `ConfigCheckbox`, `ConfigSelect`, `DemoNotes` |
-| `src/demo/registry.tsx` | Demo registry — auto-discovers demos via `import.meta.glob` |
-| `src/demo/list.ts` | Ordered list of demo IDs for the gallery |
-| `src/demos/` | Individual demo implementations |
-| `src/demo/DemoPage.tsx` | Gallery page showing all demos |
-| `src/demo/SingleDemoPage.tsx` | Single demo page |
-| `src/docs/LiveEditor.tsx` | Interactive code editor for docs (evaluates user code that exports `draggable` + `initialState`) |
-| `src/svgx/` | SVG representation (`Svgx`, `LayeredSvgx`), transforms, interpolation |
+| Typecheck | `pnpm typecheck` |
+| Unit tests (plus type tests in `*.test-d.ts`) | `pnpm test` |
+| Lint | `pnpm lint` |
+| All three | `pnpm check` |
+| Format `src` | `pnpm prettier` |
+| Fuzz every demo (takes minutes) | `pnpm fuzz` |
+| Fuzz one demo | `pnpm fuzz -t "^fuzz <demo-id>$"` |
+| Benchmarks | `pnpm bench` |
+| Build the library | `pnpm build:lib` |
 
-### Architecture
+Use the `package.json` scripts; don't improvise your own versions of them. `tsc --noEmit` is wrong!
 
-```
-Draggable<T>  (render function: state → SVG)
-     ↓
-DraggableRenderer  (low-level: drag state machine, spring animation, pointer handling)
-     ↓
-DemoDraggable  (wraps with debug overlays, spec tree, state viewer)
-```
+Fuzzing every demo takes several minutes. Don't block on a full `pnpm fuzz` without checking with the user first; fuzz just the demos your change touches (`-t "^fuzz (a|b|c)$"`) instead.
 
-DragSpec data flow:
-```
-DragSpec (plain data) → dragSpecToBehavior() → DragBehavior (frame → DragResult) → DraggableRenderer renders result
-```
+## Layout
 
-### SVG Representation
+- `src/lib.ts`: everything the library exports.
+- `src/ops/`: one drag spec operator per file (`between`, `closest`, `withOverlay`, ...): what it does during a drag, how it draws itself in the debug views, and its documented `d.*` or `spec.*` method. `src/op/`: the `Operator` and `Modifier` base classes they extend. `src/DragSpec.tsx`: the `d.*` builder and `spec.*` methods, one getter per op. `src/DragBehavior.tsx`: drag behavior types and shared rendering helpers. `src/DraggableRenderer.tsx`: the React component (pointer handling, animation). `src/svgx/`: SVG tree utilities (layers, interpolation, transforms, bounds).
+- `src/demos/`: one demo per file (or per folder with an `index.tsx`). A demo's id is its path with `/` turned into `-`, e.g. `animate-algebra/tree-macro.tsx` → `animate-algebra-tree-macro`. `src/demo/list.ts` orders the demos page.
+- `src/demo/`: demo infrastructure (`demo()`, `DemoDraggable`, config panels).
+- `src/study/`: the study pages. `src/studio/`: the studio sections.
+- `src/fuzz/`: the fuzzer.
 
-- `Svgx` = `React.ReactElement<React.SVGProps<SVGElement>>`
-- `LayeredSvgx` = `{ byId: Map<string, Svgx>, descendents: ... }` — elements with `id` get pulled to top-level
-- Root goes in with key `""`
+## Demos
 
-## 2. Making Draggables
+- A demo file default-exports `demo(Component, options)`. Add its id to `src/demo/list.ts` to show it on the demos page.
+- Mount draggables with `DemoDraggable`. That's how `src/demo/demos.test.tsx` (which mounts every demo) and the fuzzer find them.
+- The fuzzer starts from whatever `DemoDraggable` is mounted with by default. If a demo's interesting states are only reachable some other way (a config panel, another tab, a held modifier key), give it `fuzz` targets in its `demo()` options. `fuzz: false` opts out.
 
-### Structure
+## Library code
 
-Each demo in `src/demos/` is a file (or subfolder with `index.tsx`) that default-exports via `demo()`. Demos are auto-discovered by `src/demo/registry.tsx` and ordered by `src/demo/list.ts`.
+- No `className` (Tailwind) in library code, so that consumers don't need Tailwind; use inline styles. Lint enforces this. Demos, studio and study pages may use Tailwind.
+- Comment intelligently -- don't just use comments to explain changes you made to the user.
 
-A draggable definition has four parts:
+## Using the library
 
-```typescript
-import { demo } from "../demo";
-import { DemoDraggable } from "../demo/ui";
-import { Draggable } from "../draggable";
-
-// 1. State type (must be an object)
-type State = { value: boolean };
-
-// 2. Initial state
-const initialState: State = { value: false };
-
-// 3. Draggable render function
-const draggable: Draggable<State> = ({ state, d }) => (
-  <g>
-    <rect
-      id="my-element"
-      dragology={() => d.between([{ value: true }, { value: false }])}
-    />
-  </g>
-);
-
-// 4. Default export via demo()
-export default demo(() => (
-  <DemoDraggable
-    draggable={draggable}
-    initialState={initialState}
-    width={400}
-    height={300}
-  />
-));
-```
-
-### Drag Spec Constructors
-
-| Function | Use |
-|---|---|
-| `between([state1, state2, ...])` | Drag between discrete states (interpolated) |
-| `fixed(state)` | Always resolve to this state |
-| `vary(state, [["x"], ["y"]])` | Continuous numeric variation along paths |
-| `floating(states, { backdrop })` | Float between states with a backdrop |
-| `closest([spec1, spec2])` | Pick whichever spec is closest |
-| `onDrop(spec, nextState)` | Override the drop state. `nextState` can be a `T` or `(previewState: T) => T` |
-| `during(fn)` | Like `onDrop(fn)` but re-renders the transformed state live during drag |
-| `withSnapRadius(spec, radius)` | Snap within radius |
-| `withDropTransition(spec, easing)` | Custom transition on drop |
-
-### How `vary` works
-
-`vary` uses **numerical optimization**: it varies the specified params to minimize distance between the dragged element's rendered position and the pointer. Key implications:
-
-- **Deep paths work**: `d.vary(state, ["nodes", key, "x"], ["nodes", key, "y"])` for `Record`-based state (see `src/demos/graph.tsx`)
-- **The library tracks all SVG transforms**, including `rotate`. An element inside a `rotateDeg(angle)` group *does* change rendered position when `angle` changes — the library resolves the full transform chain. So you can put `dragology` with `d.vary` directly on elements inside rotated groups; no extra handle elements are needed.
-- **Only params that affect the dragged element's rendered position will have an optimization effect.** If varying a param doesn't change where the dragged element renders, the optimizer ignores it. This means you can't naively vary N items' positions to move them as a group — only the extreme items (affecting the bounding box) would move.
-- **For group movement**, vary a shared position (e.g. a pile's x/y) that all members offset from, rather than varying each member independently (see `src/demos/card-piles.tsx`)
-- The `state` arg to `vary` is the starting state for optimization (not necessarily the current rendered state). The initial param values are used as the optimizer's starting point.
-- **`during(fn)`** re-renders the transformed state each frame — use it when `vary` produces intermediate states that need cleanup (e.g. recomputing group membership as you drag). See `card-piles.tsx`.
-- **`onDrop(fn)`** accepts a function `(previewState: T) => T` to compute the drop state dynamically at drop time, not just a fixed state.
-
-### Reference demos for common patterns
-
-| Pattern | Demo file | Key technique |
-|---|---|---|
-| Free-form 2D dragging | `src/demos/graph.tsx` | `d.vary(state, ["nodes", key, "x"], ["nodes", key, "y"])` |
-| Drag-to-copy | `src/demos/drag-to-copy.tsx` | `d.switchToStateAndFollow` + `setState` for delete |
-| Permutation / reorder | `src/demos/perm.tsx` | `d.between` over all possible permutations |
-| Floating with ambiguity | `src/demos/perm-floating.tsx` | `produceAmb` + `d.closest(...).withFloating()` |
-| Nested structures | `src/demos/canvas-of-lists-nested.tsx` | Recursive rendering with path-based state updates |
-| Group movement + `during` | `src/demos/card-piles.tsx` | Vary pile position, `during(recomputePiles)` for live regrouping |
-
-### Demo Tags
-
-Tags in `demo()` use prefixes to distinguish builder methods from spec chain methods:
-- `d.` for `DragSpecBuilder` methods: `d.between`, `d.closest`, `d.vary`, `d.fixed`, `d.switchToStateAndFollow`
-- `spec.` for `DragSpec` chain methods: `spec.withFloating`, `spec.whenFar`, `spec.onDrop`, `spec.withSnapRadius`, `spec.withDropTransition`, `spec.during`, `spec.withBranchTransition`
-- No prefix for other tags: `reordering`, `puzzle`, `math`, `setState`, etc.
-
-### Gotchas
-
-- **Transform ordering**: SVG transforms are right-to-left. Put `translate()` first: `translate(x, y) + rotate(angle)`
-- **No React keys**: Use `id` attributes for element tracking, never `key`
-- **No slashes in IDs**: Use hyphens — `id="node-1-2"` not `id="node/1/2"`
-- **Positioning**: Always use `transform={translate(x, y)}`, never `x`/`y` attributes directly
-- **Layering**: Use `dragologyZIndex={isDragged ? 2 : 1}` to control draw order
-- **Conditional drag**: `dragology={condition && drag(...)}` to make things conditionally draggable
-- **`dragologyTransition={false}`**: Elements with this skip spring animation and track the cursor directly
-
-### Registration
-
-Demos are auto-discovered from `src/demos/**/*.tsx` via `import.meta.glob`. To add a new demo:
-
-1. Create `src/demos/my-demo.tsx` (or `src/demos/my-demo/index.tsx` for a subfolder)
-2. `export default demo(Component)` from the file
-3. Add `"my-demo"` to the array in `src/demo/list.ts` to set its gallery position
-
-### Config Panels
-
-For demos with user-configurable options:
-
-```typescript
-import { ConfigCheckbox, ConfigPanel, DemoDraggable, DemoWithConfig } from "../demo/ui";
-
-export const MyDemo = () => {
-  const [showLabels, setShowLabels] = useState(true);
-  const draggable = useMemo(() => makeDraggable(showLabels), [showLabels]);
-  return (
-    <DemoWithConfig>
-      <DemoDraggable draggable={draggable} initialState={state} width={400} height={300} />
-      <ConfigPanel>
-        <ConfigCheckbox label="Show labels" value={showLabels} onChange={setShowLabels} />
-      </ConfigPanel>
-    </DemoWithConfig>
-  );
-};
-```
+@docs/AGENTS.md

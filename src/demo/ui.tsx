@@ -2,9 +2,9 @@ import { PrettyPrint } from "@joshuahhh/pretty-print";
 import {
   createContext,
   ReactNode,
-  useCallback,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -18,10 +18,26 @@ import { DragSpecTreeView } from "../DragSpecTreeView";
 import { DraggableRenderer, type DragStatus } from "../DraggableRenderer";
 import { ErrorBoundary } from "../ErrorBoundary";
 import { Draggable } from "../draggable";
+import { type Bounds } from "../svgx/bounds";
 import { assert } from "../utils/assert";
+import { LayerHighlight, LayersList } from "./LayersList";
 import { OpenInEditor } from "./OpenInEditor";
 import type { Demo } from "./registry";
 import { parseTag, type TagNode, tagStringFromPath } from "./tags";
+
+// # window.dumpState
+
+const dumpStateCallbacks = new Set<() => void>();
+declare global {
+  interface Window {
+    dumpState?: () => void;
+  }
+}
+if (typeof window !== "undefined") {
+  window.dumpState = () => {
+    for (const cb of dumpStateCallbacks) cb();
+  };
+}
 
 export type DemoToggleSettings = {
   showTreeView: boolean;
@@ -29,6 +45,8 @@ export type DemoToggleSettings = {
   showDebugOverlay: boolean;
   showStateViewer: boolean;
   showTimingMeter: boolean;
+  showLayers: boolean;
+  showVaryVisualizer: boolean;
 };
 
 export type DemoSettings = DemoToggleSettings & {
@@ -43,15 +61,19 @@ const defaultToggles: DemoToggleSettings = {
   showDebugOverlay: false,
   showStateViewer: false,
   showTimingMeter: false,
+  showLayers: false,
+  showVaryVisualizer: false,
 };
 
-const DemoContext = createContext<{
-  settings: DemoSettings;
-  setToggles: React.Dispatch<React.SetStateAction<DemoToggleSettings>>;
-}>({
+export const defaultDemoContext = {
   settings: { ...defaultToggles, thumbArea: defaultThumbArea },
   setToggles: () => {},
-});
+};
+
+export const DemoContext = createContext<{
+  settings: DemoSettings;
+  setToggles: React.Dispatch<React.SetStateAction<DemoToggleSettings>>;
+}>(defaultDemoContext);
 
 export const useDemoSettings = () => useContext(DemoContext).settings;
 
@@ -106,11 +128,13 @@ export function DemoSettingsProvider({
 }
 
 const settingsEntries = [
-  { key: "showStateViewer", label: "State viewer", mobileHidden: true },
-  { key: "showDebugOverlay", label: "Debug overlay", mobileHidden: false },
+  { key: "showStateViewer", label: "State", mobileHidden: true },
+  { key: "showDebugOverlay", label: "Overlay", mobileHidden: false },
   { key: "showTreeView", label: "Spec tree", mobileHidden: true },
   { key: "showDropZones", label: "Drop zones", mobileHidden: false },
-  { key: "showTimingMeter", label: "Timing", mobileHidden: true },
+  { key: "showTimingMeter", label: "Timing", mobileHidden: false },
+  { key: "showLayers", label: "Layers", mobileHidden: true },
+  { key: "showVaryVisualizer", label: "Vary vis", mobileHidden: false },
 ] as const;
 
 const settingsIcons: Record<keyof DemoToggleSettings, ReactNode> = {
@@ -204,6 +228,36 @@ const settingsIcons: Record<keyof DemoToggleSettings, ReactNode> = {
       />
     </svg>
   ),
+  showLayers: (
+    <svg width={18} height={18} viewBox="0 0 14 14" className="shrink-0">
+      <rect x={2} y={2} width={10} height={3} rx={1} fill="#64748b" />
+      <rect
+        x={2}
+        y={6.5}
+        width={10}
+        height={3}
+        rx={1}
+        fill="#64748b"
+        opacity={0.5}
+      />
+      <rect
+        x={2}
+        y={11}
+        width={10}
+        height={3}
+        rx={1}
+        fill="#64748b"
+        opacity={0.25}
+      />
+    </svg>
+  ),
+  showVaryVisualizer: (
+    <svg width={18} height={18} viewBox="0 0 14 14" className="shrink-0">
+      <circle cx={5} cy={7} r={2} fill="#f97316" opacity={0.4} />
+      <circle cx={9} cy={5} r={2} fill="#f97316" opacity={0.4} />
+      <circle cx={7} cy={10} r={2} fill="#f97316" opacity={0.4} />
+    </svg>
+  ),
 };
 
 const settingsActiveColors: Record<
@@ -215,36 +269,100 @@ const settingsActiveColors: Record<
   showTreeView: { bg: "#fffbeb", border: "#f59e0b" },
   showDropZones: { bg: "#eff6ff", border: "#3b82f6" },
   showTimingMeter: { bg: "#f1f5f9", border: "#64748b" },
+  showLayers: { bg: "#f1f5f9", border: "#64748b" },
+  showVaryVisualizer: { bg: "#fff7ed", border: "#f97316" },
 };
 
-function TimingMeter() {
-  const [msPerFrame, setMsPerFrame] = useState(0);
-  const framesRef = useRef(0);
-  const lastTimeRef = useRef(performance.now());
+const TIMING_BAR_COUNT = 90;
+const TIMING_MAX_MS = 50; // constant y scale: 0–50ms (3 frames at 60fps)
+const TIMING_BAR_W = 2;
+const TIMING_BAR_GAP = 1;
+const TIMING_H = 32;
 
-  const tick = useCallback(() => {
-    framesRef.current++;
-    const now = performance.now();
-    const elapsed = now - lastTimeRef.current;
-    if (elapsed >= 1000) {
-      setMsPerFrame(+(elapsed / framesRef.current).toFixed(1));
-      framesRef.current = 0;
-      lastTimeRef.current = now;
-    }
-  }, []);
+function TimingMeter() {
+  const frameTimes = useRef<number[]>([]);
+  const lastTimeRef = useRef(performance.now());
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const medianRef = useRef(0);
+  const medianLabelRef = useRef<HTMLSpanElement>(null);
 
   useEffect(() => {
     let id: number;
     const loop = () => {
-      tick();
+      const now = performance.now();
+      const dt = now - lastTimeRef.current;
+      lastTimeRef.current = now;
+
+      const buf = frameTimes.current;
+      buf.push(dt);
+      if (buf.length > TIMING_BAR_COUNT) buf.shift();
+
+      const canvas = canvasRef.current;
+      if (canvas) {
+        const ctx = canvas.getContext("2d")!;
+        const dpr = window.devicePixelRatio || 1;
+        const w = canvas.clientWidth;
+        const h = canvas.clientHeight;
+        canvas.width = w * dpr;
+        canvas.height = h * dpr;
+        ctx.scale(dpr, dpr);
+        ctx.clearRect(0, 0, w, h);
+
+        // 16.67ms guideline
+        const guideY = h * (1 - 16.67 / TIMING_MAX_MS);
+        ctx.strokeStyle = "#e2e8f0";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(0, guideY);
+        ctx.lineTo(w, guideY);
+        ctx.stroke();
+
+        for (let i = 0; i < buf.length; i++) {
+          const ms = buf[i];
+          const barH = Math.min(ms / TIMING_MAX_MS, 1) * h;
+          const x = i * (TIMING_BAR_W + TIMING_BAR_GAP);
+          const color =
+            ms > 20 ? "#ef4444" : ms > 16.67 ? "#f59e0b" : "#22c55e";
+          ctx.fillStyle = color;
+          ctx.fillRect(x, h - barH, TIMING_BAR_W, barH);
+        }
+
+        // median
+        if (buf.length > 0) {
+          const sorted = [...buf].sort((a, b) => a - b);
+          const mid = Math.floor(sorted.length / 2);
+          const median =
+            sorted.length % 2
+              ? sorted[mid]
+              : (sorted[mid - 1] + sorted[mid]) / 2;
+          medianRef.current = median;
+          if (medianLabelRef.current) {
+            medianLabelRef.current.textContent = `${Math.round(median)}ms`;
+          }
+        }
+      }
+
       id = requestAnimationFrame(loop);
     };
     id = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(id);
-  }, [tick]);
+  }, []);
+
+  const totalW =
+    TIMING_BAR_COUNT * (TIMING_BAR_W + TIMING_BAR_GAP) - TIMING_BAR_GAP;
 
   return (
-    <div className="text-xs font-mono text-slate-500">{msPerFrame} ms/f</div>
+    <div>
+      <div className="flex items-center gap-2">
+        <canvas ref={canvasRef} style={{ width: totalW, height: TIMING_H }} />
+        <span className="text-xs font-mono text-slate-400">
+          {TIMING_MAX_MS}ms
+        </span>
+      </div>
+      <span className="text-xs font-mono text-slate-400">
+        P50 <span ref={medianLabelRef} />
+      </span>
+    </div>
   );
 }
 
@@ -257,77 +375,167 @@ export function DemoSettingsBar({
     ? settingsEntries.filter(({ key }) => only.includes(key))
     : settingsEntries;
   return (
-    <div
-      className={`fixed bottom-0 left-0 right-0 flex justify-center pointer-events-none`}
-    >
+    <>
+      {settings.showTimingMeter && (
+        <div className="fixed top-2 right-2 bg-white/90 border border-gray-200 rounded-lg p-2 shadow-sm z-50">
+          <TimingMeter />
+        </div>
+      )}
       <div
-        className={`pointer-events-auto bg-white border border-gray-200 flex items-center shadow-[0_-4px_12px_rgba(0,0,0,0.08)] ${
-          compact
-            ? "py-1.5 px-2 rounded-full gap-1 mb-2 border-b"
-            : "py-2 px-3 rounded-t-3xl border-b-0 gap-1.5"
-        }`}
+        className={`fixed bottom-0 left-0 right-0 flex justify-center pointer-events-none`}
       >
-        {entries.map(({ key, label, mobileHidden }) => {
-          const active = settings[key];
-          const colors = settingsActiveColors[key];
-          return (
-            <button
-              key={key}
-              title={label}
-              className={`${
-                mobileHidden && !compact
-                  ? "hidden md:inline-flex"
-                  : "inline-flex"
-              } items-center rounded-full border select-none cursor-pointer ${
-                compact ? "p-1.5" : "gap-1.5 px-3 py-1.5 text-xs font-medium"
-              }`}
-              style={
-                active
-                  ? {
-                      backgroundColor: colors.bg,
-                      borderColor: colors.border,
-                      color: "#374151",
-                    }
-                  : {
-                      backgroundColor: "transparent",
-                      borderColor: "#e2e8f0",
-                      color: "#94a3b8",
-                    }
-              }
-              onClick={() => setToggles((s) => ({ ...s, [key]: !s[key] }))}
-            >
-              <span className="shrink-0" style={{ opacity: active ? 1 : 0.4 }}>
-                {settingsIcons[key]}
-              </span>
-              {!compact && label}
-            </button>
-          );
-        })}
+        <div
+          className={`pointer-events-auto bg-white border border-gray-200 flex items-center shadow-[0_-4px_12px_rgba(0,0,0,0.08)] ${
+            compact
+              ? "py-1.5 px-2 rounded-full gap-1 mb-2 border-b"
+              : "py-2 px-3 rounded-t-3xl border-b-0 gap-1.5"
+          }`}
+        >
+          {entries.map(({ key, label, mobileHidden }) => {
+            const active = settings[key];
+            const colors = settingsActiveColors[key];
+            return (
+              <button
+                key={key}
+                title={label}
+                className={`${
+                  mobileHidden && !compact
+                    ? "hidden md:inline-flex"
+                    : "inline-flex"
+                } items-center rounded-full border select-none cursor-pointer ${
+                  compact ? "p-1.5" : "gap-1.5 px-3 py-1.5 text-xs font-medium"
+                }`}
+                style={
+                  active
+                    ? {
+                        backgroundColor: colors.bg,
+                        borderColor: colors.border,
+                        color: "#374151",
+                      }
+                    : {
+                        backgroundColor: "transparent",
+                        borderColor: "#e2e8f0",
+                        color: "#94a3b8",
+                      }
+                }
+                onClick={() => setToggles((s) => ({ ...s, [key]: !s[key] }))}
+              >
+                <span
+                  className="shrink-0"
+                  style={{ opacity: active ? 1 : 0.4 }}
+                >
+                  {settingsIcons[key]}
+                </span>
+                {!compact && label}
+              </button>
+            );
+          })}
+        </div>
       </div>
-    </div>
+    </>
   );
+}
+
+// ## Collecting draggables for tests
+//
+// Tests (see src/fuzz/demos.fuzz.test.tsx) need each demo's draggable
+// and initial state, which are otherwise private to the demo. Every
+// demo mounts DemoDraggable with exactly those, so when collection is
+// enabled, DemoDraggable records what it was mounted with.
+
+export type CollectedDraggable = {
+  draggable: Draggable<any>;
+  initialState: any;
+};
+
+let collector: CollectedDraggable[] | null = null;
+
+/** Enable collection; returns a function that stops it and returns what was collected. */
+export function collectDraggables(): () => CollectedDraggable[] {
+  const collected: CollectedDraggable[] = [];
+  collector = collected;
+  return () => {
+    if (collector === collected) collector = null;
+    return collected;
+  };
 }
 
 export function DemoDraggable<T extends object>({
   draggable,
   initialState,
+  state: controlledState,
+  onDropState,
   width,
   height,
+  stateRef,
+  stateOverride,
+  onDragState,
 }: {
   draggable: Draggable<T>;
-  initialState: T;
   width: number;
   height: number;
-}) {
+  stateRef?: React.RefObject<T | null>;
+  stateOverride?: Partial<T>;
+  /** Called with the preview state on every frame of a drag. */
+  onDragState?: (state: T) => void;
+} & (
+  | { initialState: T; state?: undefined; onDropState?: undefined }
+  /** Controlled: the caller owns the state. */
+  | { state: T; onDropState: (state: T) => void; initialState?: undefined }
+)) {
+  // exactly one of these is given
+  const start = (initialState ?? controlledState) as T;
+  const collectedRef = useRef(false);
+  if (collector && !collectedRef.current) {
+    collectedRef.current = true;
+    collector.push({
+      draggable,
+      initialState: stateOverride ? { ...start, ...stateOverride } : start,
+    });
+  }
+
+  const [ownState, setOwnState] = useState(start);
+  const baseState = controlledState ?? ownState;
+  const state = useMemo(
+    () => (stateOverride ? { ...baseState, ...stateOverride } : baseState),
+    [baseState, stateOverride],
+  );
   const {
     showTreeView,
     showDropZones,
     showDebugOverlay,
     showStateViewer,
-    showTimingMeter,
+    showLayers,
+    showVaryVisualizer,
     thumbArea,
   } = useDemoSettings();
   const [status, setStatus] = useState<DragStatus<T> | null>(null);
+  const handleDropState = onDropState ?? setOwnState;
+  const [hoveredLayerBounds, setHoveredLayerBounds] = useState<Bounds | null>(
+    null,
+  );
+
+  useEffect(() => {
+    if (stateRef) {
+      if (status?.type === "idle") {
+        stateRef.current = status.state;
+      } else {
+        stateRef.current = null;
+      }
+    }
+  }, [stateRef, status]);
+
+  useEffect(() => {
+    const cb = () => {
+      if (status?.type === "idle") {
+        console.log(status.state);
+      }
+    };
+    dumpStateCallbacks.add(cb);
+    return () => {
+      dumpStateCallbacks.delete(cb);
+    };
+  }, [status]);
 
   const draggingStatus = status?.type === "dragging" ? status : null;
 
@@ -339,17 +547,27 @@ export function DemoDraggable<T extends object>({
 
   return (
     <ErrorBoundary>
-      <div className="flex flex-col gap-2">
+      <div className="flex flex-col gap-2 min-w-0 max-w-full">
         <div className="flex gap-4 items-start">
           <div className="relative">
             <DraggableRenderer
               draggable={draggable}
-              initialState={initialState}
+              state={state}
               width={width}
               height={height}
               onDragStatus={setStatus}
               showDebugOverlay={showDebugOverlay}
+              showVaryVisualizer={showVaryVisualizer}
+              onDropState={handleDropState}
+              onDragState={onDragState}
             />
+            {hoveredLayerBounds && (
+              <LayerHighlight
+                bounds={hoveredLayerBounds}
+                width={width}
+                height={height}
+              />
+            )}
             {showDropZones && overlayData && (
               <DropZonesSvg data={overlayData} width={width} height={height} />
             )}
@@ -381,18 +599,17 @@ export function DemoDraggable<T extends object>({
               </svg>
             )}
           </div>
-          {(showTreeView || showStateViewer || showTimingMeter) && (
-            <div className="min-w-72 flex-1 flex flex-col gap-2">
-              {showTimingMeter && <TimingMeter />}
+          {(showTreeView || showStateViewer || showLayers) && (
+            <div className="flex-1 flex flex-col gap-2 min-w-0">
               {showTreeView && (
                 <>
                   {draggingStatus ? (
-                    <div className="flex flex-col gap-2">
+                    <div className="flex flex-col gap-2 min-w-0">
                       <div className="text-xs text-slate-500 font-mono whitespace-nowrap">
                         activePath: {draggingStatus.result.activePath}
                       </div>
                       <DragSpecTreeView
-                        spec={draggingStatus.result.tracedSpec}
+                        op={draggingStatus.result.op}
                         activePath={draggingStatus.result.activePath}
                         colorMap={overlayData?.colorMap ?? null}
                         svgWidth={width}
@@ -409,18 +626,86 @@ export function DemoDraggable<T extends object>({
               )}
               {showStateViewer && status && (
                 <ErrorBoundary>
-                  <PrettyPrint
-                    value={
-                      status.type === "dragging"
-                        ? status.result.dropState
-                        : status.state
-                    }
-                    precision={2}
-                    style={{ fontSize: "11px" }}
-                    niceId={false}
-                    niceType={false}
-                  />
+                  <div className="flex gap-4">
+                    <div className="min-w-[50%]">
+                      <div className="text-xs text-slate-500 flex items-center gap-1.5">
+                        drop state
+                        <button
+                          className="text-slate-400 hover:text-slate-600 transition-colors cursor-pointer"
+                          title="Copy state as JSON"
+                          onClick={() => {
+                            const state =
+                              status.type === "dragging"
+                                ? status.startState
+                                : status.state;
+                            navigator.clipboard.writeText(
+                              JSON.stringify(state, null, 2),
+                            );
+                          }}
+                        >
+                          <svg
+                            width={12}
+                            height={12}
+                            viewBox="0 0 16 16"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth={1.5}
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          >
+                            <rect x={5} y={5} width={9} height={9} rx={1.5} />
+                            <path d="M11 5V3.5A1.5 1.5 0 0 0 9.5 2h-6A1.5 1.5 0 0 0 2 3.5v6A1.5 1.5 0 0 0 3.5 11H5" />
+                          </svg>
+                        </button>
+                      </div>
+                      <PrettyPrint
+                        value={
+                          status.type === "dragging"
+                            ? status.startState
+                            : status.state
+                        }
+                        precision={2}
+                        style={{ fontSize: "11px" }}
+                        niceId={false}
+                        niceType={false}
+                      />
+                    </div>
+                    {status.type === "dragging" && (
+                      <div className="min-w-[50%]">
+                        <div className="text-xs text-slate-500">drag state</div>
+                        <PrettyPrint
+                          value={status.result.dropState}
+                          precision={2}
+                          style={{ fontSize: "11px" }}
+                          niceId={false}
+                          niceType={false}
+                        />
+                      </div>
+                    )}
+                  </div>
+                  {/* {status.springOrigin && (
+                    <div>
+                      <div className="text-xs text-slate-500 mb-1">
+                        Spring origin
+                      </div>
+                      <svg
+                        width={120}
+                        height={120 * (height / width)}
+                        viewBox={`0 0 ${width} ${height}`}
+                        className="border border-slate-200 rounded bg-white"
+                      >
+                        {drawLayered(status.springOrigin.layered)}
+                      </svg>
+                    </div>
+                  )} */}
                 </ErrorBoundary>
+              )}
+              {showLayers && status && (
+                <LayersList
+                  draggable={draggable}
+                  status={status}
+                  onHoverBounds={setHoveredLayerBounds}
+                />
               )}
             </div>
           )}
@@ -602,11 +887,15 @@ function TagNodeView({
 }
 
 export function DemoWithConfig({ children }: { children: React.ReactNode }) {
-  const { showTreeView, showStateViewer, showTimingMeter } = useDemoSettings();
-  const debugOpen = showTreeView || showStateViewer || showTimingMeter;
+  const { showTreeView, showStateViewer, showLayers } = useDemoSettings();
+  const debugOpen = showTreeView || showStateViewer || showLayers;
+  // Side by side when there's room for the panel next to the content, else
+  // the panel wraps below. Giving the content a zero basis makes the wrap
+  // decision use its min-content width (the canvas), not the width of its
+  // notes laid out on one line.
   return (
     <div
-      className={`flex flex-col ${debugOpen ? "" : "md:flex-row"} gap-4 items-start`}
+      className={`flex gap-4 items-start max-w-full ${debugOpen ? "flex-col" : "flex-wrap [&>:not([data-config-panel])]:grow [&>:not([data-config-panel])]:basis-0"}`}
     >
       {children}
     </div>
@@ -621,7 +910,10 @@ export function ConfigPanel({
   children?: React.ReactNode;
 }) {
   return (
-    <div className="bg-gray-50 rounded p-3 shrink-0 md:sticky md:top-4">
+    <div
+      data-config-panel
+      className="bg-gray-50 rounded p-3 shrink-0 md:sticky md:top-4"
+    >
       <div className="text-xs font-medium text-gray-700 mb-2">{title}</div>
       <div className="flex flex-col gap-2">{children}</div>
     </div>
